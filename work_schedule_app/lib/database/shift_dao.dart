@@ -154,6 +154,26 @@ class ShiftDao {
     return result.isNotEmpty;
   }
 
+  /// Get conflicting shifts (for showing conflict details)
+  Future<List<Shift>> getConflicts(int employeeId, DateTime start, DateTime end, {int? excludeId}) async {
+    final db = await _db;
+    String where = 'employeeId = ? AND startTime < ? AND endTime > ?';
+    List<dynamic> whereArgs = [employeeId, end.toIso8601String(), start.toIso8601String()];
+    
+    if (excludeId != null) {
+      where += ' AND id != ?';
+      whereArgs.add(excludeId);
+    }
+    
+    final result = await db.query(
+      'shifts',
+      where: where,
+      whereArgs: whereArgs,
+      orderBy: 'startTime ASC',
+    );
+    return result.map((m) => Shift.fromMap(m)).toList();
+  }
+
   /// Bulk insert shifts (useful for copy week functionality)
   Future<void> insertAll(List<Shift> shifts) async {
     final db = await _db;

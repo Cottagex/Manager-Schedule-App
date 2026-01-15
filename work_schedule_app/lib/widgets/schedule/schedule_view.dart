@@ -350,6 +350,13 @@ class _ScheduleViewState extends State<ScheduleView> {
         if (tod.hour == 0 || tod.hour == 1) start = start.add(const Duration(days: 1));
         final end = start.add(dur);
         
+        // Check for conflicts
+        final hasConflict = await _shiftDao.hasConflict(employeeId, start, end);
+        if (hasConflict && mounted) {
+          final proceed = await _showConflictWarning(context, employeeId, start, end);
+          if (!proceed) return;
+        }
+        
         // Save to database
         final shift = Shift(
           employeeId: employeeId,
@@ -368,6 +375,16 @@ class _ScheduleViewState extends State<ScheduleView> {
             await _shiftDao.delete(oldShift.id!);
           }
         } else {
+          // Check for conflicts (exclude current shift if editing)
+          final hasConflict = await _shiftDao.hasConflict(
+            oldShift.employeeId, newStart, newEnd, 
+            excludeId: oldShift.id,
+          );
+          if (hasConflict && mounted) {
+            final proceed = await _showConflictWarning(context, oldShift.employeeId, newStart, newEnd, excludeId: oldShift.id);
+            if (!proceed) return;
+          }
+          
           // Update or add
           if (oldShift.id != null) {
             // Update existing
@@ -401,6 +418,16 @@ class _ScheduleViewState extends State<ScheduleView> {
           shift.start.hour, shift.start.minute,
         );
         final newEnd = newStart.add(duration);
+        
+        // Check for conflicts
+        final hasConflict = await _shiftDao.hasConflict(
+          newEmployeeId, newStart, newEnd,
+          excludeId: shift.id,
+        );
+        if (hasConflict && mounted) {
+          final proceed = await _showConflictWarning(context, newEmployeeId, newStart, newEnd, excludeId: shift.id);
+          if (!proceed) return;
+        }
         
         if (shift.id != null) {
           // Update existing shift with new employee and times
@@ -476,6 +503,99 @@ class _ScheduleViewState extends State<ScheduleView> {
   String _dayOfWeekAbbr(DateTime date) {
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     return days[date.weekday % 7];
+  }
+
+  /// Show a warning dialog when there's a scheduling conflict
+  Future<bool> _showConflictWarning(
+    BuildContext context, 
+    int employeeId, 
+    DateTime start, 
+    DateTime end, 
+    {int? excludeId}
+  ) async {
+    final conflicts = await _shiftDao.getConflicts(employeeId, start, end, excludeId: excludeId);
+    final employee = _employees.firstWhere(
+      (e) => e.id == employeeId, 
+      orElse: () => Employee(id: employeeId, name: 'Unknown', jobCode: ''),
+    );
+    
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.orange.shade700),
+              const SizedBox(width: 8),
+              const Text('Scheduling Conflict'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${employee.name} already has a shift that overlaps with this time:',
+                style: const TextStyle(fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  border: Border.all(color: Colors.orange.shade200),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'New shift: ${_formatTimeRange(start, end)}',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const Divider(),
+                    const Text('Conflicting shift(s):', style: TextStyle(fontWeight: FontWeight.w500)),
+                    const SizedBox(height: 4),
+                    ...conflicts.map((c) => Padding(
+                      padding: const EdgeInsets.only(left: 8, top: 2),
+                      child: Text('• ${_formatTimeRange(c.startTime, c.endTime)}'),
+                    )),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text('Do you want to proceed anyway?'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Proceed Anyway'),
+            ),
+          ],
+        );
+      },
+    );
+    return result ?? false;
+  }
+
+  String _formatTimeRange(DateTime start, DateTime end) {
+    String formatTime(DateTime dt) {
+      final h = dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour);
+      final suffix = dt.hour >= 12 ? 'PM' : 'AM';
+      final mm = dt.minute.toString().padLeft(2, '0');
+      return '$h:$mm $suffix';
+    }
+    final dateStr = '${start.month}/${start.day}/${start.year}';
+    return '$dateStr ${formatTime(start)} - ${formatTime(end)}';
   }
 
 }
