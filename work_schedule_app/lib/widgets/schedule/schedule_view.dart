@@ -10,6 +10,7 @@ import '../../models/employee.dart';
 import '../../models/time_off_entry.dart';
 import '../../models/shift_template.dart';
 import '../../models/shift.dart';
+import '../../services/schedule_pdf_service.dart';
 
 // Custom intents for keyboard shortcuts
 class CopyIntent extends Intent {
@@ -183,6 +184,48 @@ class _ScheduleViewState extends State<ScheduleView> {
     _refreshShifts();
   }
 
+  Future<void> _handlePrintExport(String action) async {
+    try {
+      late final Uint8List pdfBytes;
+      late final String title;
+      late final String filename;
+
+      if (_mode == ScheduleMode.weekly || _mode == ScheduleMode.daily) {
+        // Get week start (Sunday)
+        final weekStart = _date.subtract(Duration(days: _date.weekday % 7));
+        pdfBytes = await SchedulePdfService.generateWeeklyPdf(
+          weekStart: weekStart,
+          employees: _employees,
+          shifts: _shifts,
+        );
+        title = 'Schedule - Week of ${weekStart.month}/${weekStart.day}/${weekStart.year}';
+        filename = 'schedule_${weekStart.year}_${weekStart.month}_${weekStart.day}.pdf';
+      } else {
+        pdfBytes = await SchedulePdfService.generateMonthlyPdf(
+          year: _date.year,
+          month: _date.month,
+          employees: _employees,
+          shifts: _shifts,
+        );
+        final monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        title = 'Schedule - ${monthNames[_date.month - 1]} ${_date.year}';
+        filename = 'schedule_${_date.year}_${_date.month}.pdf';
+      }
+
+      if (action == 'print') {
+        await SchedulePdfService.printSchedule(pdfBytes, title);
+      } else {
+        await SchedulePdfService.sharePdf(pdfBytes, filename);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to generate PDF: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -247,6 +290,34 @@ class _ScheduleViewState extends State<ScheduleView> {
             Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('Daily')),
             Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('Weekly')),
             Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('Monthly')),
+          ],
+        ),
+        const SizedBox(width: 8),
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.print),
+          tooltip: 'Print/Export Schedule',
+          onSelected: (value) => _handlePrintExport(value),
+          itemBuilder: (context) => [
+            const PopupMenuItem(
+              value: 'print',
+              child: Row(
+                children: [
+                  Icon(Icons.print, size: 20),
+                  SizedBox(width: 8),
+                  Text('Print Schedule'),
+                ],
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'share',
+              child: Row(
+                children: [
+                  Icon(Icons.share, size: 20),
+                  SizedBox(width: 8),
+                  Text('Export/Share PDF'),
+                ],
+              ),
+            ),
           ],
         ),
       ],
