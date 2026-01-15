@@ -1,0 +1,1532 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import '../../database/employee_dao.dart';
+import '../../database/time_off_dao.dart';
+import '../../database/employee_availability_dao.dart';
+import '../../database/shift_template_dao.dart';
+import '../../database/job_code_settings_dao.dart';
+import '../../models/employee.dart';
+import '../../models/time_off_entry.dart';
+import '../../models/shift_template.dart';
+import '../../models/job_code_settings.dart';
+
+// Custom intents for keyboard shortcuts
+class CopyIntent extends Intent {
+  const CopyIntent();
+}
+
+class PasteIntent extends Intent {
+  const PasteIntent();
+}
+
+enum ScheduleMode { daily, weekly, monthly }
+
+bool _isLabelOnly(String text) {
+  final t = text.toLowerCase();
+  return t == 'off' || t == 'pto' || t == 'vac' || t == 'req off';
+}
+
+String _labelText(String text) {
+  final t = text.toLowerCase();
+  if (t == 'off') return 'OFF';
+  if (t == 'pto') return 'PTO';
+  if (t == 'vac') return 'VAC';
+  if (t == 'req off') return 'REQ OFF';
+  return text;
+}
+
+class ScheduleView extends StatefulWidget {
+  final DateTime initialDate;
+  final ScheduleMode initialMode;
+
+  ScheduleView({super.key, DateTime? date, this.initialMode = ScheduleMode.weekly})
+      : initialDate = date ?? DateTime.now();
+
+  @override
+  State<ScheduleView> createState() => _ScheduleViewState();
+}
+
+class _ScheduleViewState extends State<ScheduleView> {
+  late DateTime _date;
+  late ScheduleMode _mode;
+  final EmployeeDao _employeeDao = EmployeeDao();
+  final TimeOffDao _timeOffDao = TimeOffDao();
+  List<Employee> _employees = [];
+  List<ShiftPlaceholder> _shifts = [];
+
+  // simple in-memory clipboard for copy/paste: stores start TimeOfDay, duration, and text
+  Map<String, Object?>? _clipboard;
+
+  @override
+  void initState() {
+    super.initState();
+    _date = widget.initialDate;
+    _mode = widget.initialMode;
+    _loadEmployees();
+  }
+
+  List<ShiftPlaceholder> _timeOffToShifts(List<TimeOffEntry> entries) {
+    return entries.map((e) {
+      String label;
+      switch (e.timeOffType.toLowerCase()) {
+        case 'vac':
+          label = 'VAC';
+          break;
+        case 'pto':
+          label = 'PTO';
+          break;
+        default:
+          label = 'REQ OFF';
+      }
+      return ShiftPlaceholder(
+        employeeId: e.employeeId,
+        start: DateTime(e.date.year, e.date.month, e.date.day, 0, 0),
+        end: DateTime(e.date.year, e.date.month, e.date.day, 23, 59),
+        text: label,
+      );
+    }).toList();
+  }
+
+  Future<void> _refreshShifts() async {
+    final timeOffEntries = await _timeOffDao.getAllTimeOff();
+    final timeOffShifts = _timeOffToShifts(timeOffEntries);
+    if (!mounted) return;
+    setState(() {
+      _shifts = timeOffShifts;
+    });
+  }
+
+  Future<void> _loadEmployees() async {
+    final list = await _employeeDao.getEmployees();
+    debugPrint('ScheduleView: loaded ${list.length} employee(s) from DB');
+    if (!mounted) return;
+
+    setState(() {
+      _employees = _sortEmployeesByJobCode(list);
+    });
+
+    await _refreshShifts();
+  }
+
+  List<Employee> _sortEmployeesByJobCode(List<Employee> employees) {
+    // Job code hierarchy: GM > Assistant > Swing > MIT > Breakfast Mgr
+    const hierarchy = {
+      'gm': 1,
+      'assistant': 2,
+      'swing': 3,
+      'mit': 4,
+      'breakfast mgr': 5,
+    };
+
+    final sorted = List<Employee>.from(employees);
+    sorted.sort((a, b) {
+      final aOrder = hierarchy[a.jobCode.toLowerCase()] ?? 999;
+      final bOrder = hierarchy[b.jobCode.toLowerCase()] ?? 999;
+      if (aOrder != bOrder) {
+        return aOrder.compareTo(bOrder);
+      }
+      // If same job code, sort by name
+      return a.name.compareTo(b.name);
+    });
+    return sorted;
+  }
+
+  void _prev() {
+    setState(() {
+      if (_mode == ScheduleMode.daily) {
+        _date = _date.subtract(const Duration(days: 1));
+      } else if (_mode == ScheduleMode.weekly) {
+        _date = _date.subtract(const Duration(days: 7));
+      } else {
+        _date = DateTime(_date.year, _date.month - 1, 1);
+      }
+    });
+    _refreshShifts();
+  }
+
+  void _next() {
+    setState(() {
+      if (_mode == ScheduleMode.daily) {
+        _date = _date.add(const Duration(days: 1));
+      } else if (_mode == ScheduleMode.weekly) {
+        _date = _date.add(const Duration(days: 7));
+      } else {
+        _date = DateTime(_date.year, _date.month + 1, 1);
+      }
+    });
+    _refreshShifts();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildControls(context),
+        const SizedBox(height: 8),
+        Expanded(child: _buildBody()),
+      ],
+    );
+  }
+
+  Widget _buildControls(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IconButton(
+                onPressed: _prev, 
+                icon: const Icon(Icons.chevron_left),
+                padding: const EdgeInsets.all(8),
+                constraints: const BoxConstraints(),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                _mode == ScheduleMode.monthly
+                    ? "${_monthName(_date.month)} ${_date.year} (Monthly view disabled)"
+                    : _mode == ScheduleMode.weekly
+                        ? "Week of ${_date.month}/${_date.day}/${_date.year}"
+                        : "${_dayOfWeekAbbr(_date)}, ${_monthName(_date.month)} ${_date.day}, ${_date.year}",
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                onPressed: _next, 
+                icon: const Icon(Icons.chevron_right),
+                padding: const EdgeInsets.all(8),
+                constraints: const BoxConstraints(),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        ToggleButtons(
+          isSelected: [
+            _mode == ScheduleMode.daily,
+            _mode == ScheduleMode.weekly,
+            _mode == ScheduleMode.monthly,
+          ],
+          onPressed: (i) {
+            setState(() {
+              _mode = ScheduleMode.values[i];
+            });
+            _refreshShifts();
+          },
+          children: const [
+            Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('Daily')),
+            Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('Weekly')),
+            Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('Monthly')),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBody() {
+    if (_mode == ScheduleMode.daily) {
+      return DailyScheduleView(date: _date, employees: _employees, shifts: _shifts);
+    }
+    if (_mode == ScheduleMode.weekly) {
+      return WeeklyScheduleView(
+      date: _date,
+      employees: _employees,
+      shifts: _shifts,
+      clipboardAvailable: _clipboard != null,
+      onCopyShift: (s) {
+        setState(() {
+          _clipboard = {'start': TimeOfDay(hour: s.start.hour, minute: s.start.minute), 'duration': s.end.difference(s.start), 'text': s.text};
+        });
+      },
+      onPasteTarget: (day, employeeId) {
+        if (_clipboard == null) {
+          return;
+        }
+        final tod = _clipboard!['start'] as TimeOfDay;
+        final dur = _clipboard!['duration'] as Duration;
+        DateTime start = DateTime(day.year, day.month, day.day, tod.hour, tod.minute);
+        // times with hour 0 or 1 are next-day
+        if (tod.hour == 0 || tod.hour == 1) start = start.add(const Duration(days: 1));
+        final end = start.add(dur);
+        setState(() {
+          _shifts.add(ShiftPlaceholder(employeeId: employeeId, start: start, end: end, text: _clipboard!['text'] as String));
+          _clipboard = null; // Clear clipboard after pasting
+        });
+      },
+      onUpdateShift: (oldShift, newStart, newEnd) {
+        setState(() {
+          final i = _shifts.indexWhere((s) => s == oldShift);
+          if (i >= 0) {
+            // If start == end, it's a delete signal
+            if (newStart == newEnd) {
+              _shifts.removeAt(i);
+            } else {
+              _shifts[i] = ShiftPlaceholder(employeeId: oldShift.employeeId, start: newStart, end: newEnd, text: oldShift.text);
+            }
+          } else {
+            // New shift (e.g., "Off" marked from empty cell)
+            if (newStart != newEnd) {
+              _shifts.add(ShiftPlaceholder(employeeId: oldShift.employeeId, start: newStart, end: newEnd, text: oldShift.text));
+            }
+          }
+        });
+      },
+      );
+    }
+
+    return MonthlyScheduleView(
+      date: _date,
+      employees: _employees,
+      shifts: _shifts,
+      onUpdateShift: (oldShift, newStart, newEnd) {
+        setState(() {
+          final i = _shifts.indexWhere((s) => s == oldShift);
+          if (i >= 0) {
+            if (newStart == newEnd) {
+              _shifts.removeAt(i);
+            } else {
+              _shifts[i] = ShiftPlaceholder(employeeId: oldShift.employeeId, start: newStart, end: newEnd, text: oldShift.text);
+            }
+          } else {
+            if (newStart != newEnd) {
+              _shifts.add(ShiftPlaceholder(employeeId: oldShift.employeeId, start: newStart, end: newEnd, text: oldShift.text));
+            }
+          }
+        });
+      },
+    );
+  }
+
+  String _monthName(int month) {
+    const names = [
+      'January','February','March','April','May','June',
+      'July','August','September','October','November','December'
+    ];
+    return names[month - 1];
+  }
+
+  String _dayOfWeekAbbr(DateTime date) {
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    return days[date.weekday % 7];
+  }
+
+}
+
+// ------------------------------------------------------------
+// DAILY VIEW - list-only view: show shifts for a single day sorted by start time
+// ------------------------------------------------------------
+class DailyScheduleView extends StatelessWidget {
+  final DateTime date;
+  final List<Employee> employees;
+  final List<ShiftPlaceholder> shifts;
+
+  const DailyScheduleView({super.key, required this.date, required this.employees, this.shifts = const []});
+
+  List<ShiftPlaceholder> _shiftsForDate() {
+    final d = DateTime(date.year, date.month, date.day);
+    final list = shifts.where((s) {
+      return s.start.year == d.year && s.start.month == d.month && s.start.day == d.day;
+    }).toList();
+    list.sort((a, b) => a.start.compareTo(b.start)); // earlier first
+    return list;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _shiftsForDate();
+
+    if (items.isEmpty) {
+      return Center(child: Text('No shifts for ${date.month}/${date.day}/${date.year}'));
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.all(8),
+      itemCount: items.length,
+      separatorBuilder: (context, idx) => const Divider(height: 12),
+      itemBuilder: (context, idx) {
+        final s = items[idx];
+        final emp = employees.firstWhere((e) => e.id == s.employeeId, orElse: () => Employee(id: s.employeeId, name: 'Employee', jobCode: ''));
+        final time = _formatTimeOfDay(TimeOfDay(hour: s.start.hour, minute: s.start.minute));
+        return ListTile(
+          key: ValueKey('daily-shift-${s.employeeId}-${s.start.toIso8601String()}'),
+          leading: CircleAvatar(child: Text(emp.name.isNotEmpty ? emp.name[0] : '?')),
+          title: Text(emp.name),
+          subtitle: Text('$time — ${_formatTimeOfDay(TimeOfDay(hour: s.end.hour, minute: s.end.minute))}'),
+          trailing: Text(s.text),
+        );
+      },
+    );
+  }
+
+  String _formatTimeOfDay(TimeOfDay t) {
+    final h = t.hourOfPeriod == 0 ? 12 : t.hourOfPeriod;
+    final mm = t.minute.toString().padLeft(2, '0');
+    final suffix = t.period == DayPeriod.am ? 'AM' : 'PM';
+    return '$h:$mm $suffix';
+  }
+}
+
+// ------------------------------------------------------------
+// WEEKLY VIEW - days on Y axis (Mon..Sun or starting with date's week), employees on X axis
+// ------------------------------------------------------------
+class WeeklyScheduleView extends StatefulWidget {
+  final DateTime date;
+  final List<Employee> employees;
+  final List<ShiftPlaceholder> shifts;
+  final void Function(ShiftPlaceholder oldShift, DateTime newStart, DateTime newEnd)? onUpdateShift;
+  final void Function(ShiftPlaceholder shift)? onCopyShift;
+  final void Function(DateTime day, int employeeId)? onPasteTarget;
+  final bool clipboardAvailable;
+
+  const WeeklyScheduleView({
+    super.key,
+    required this.date,
+    required this.employees,
+    this.shifts = const [],
+    this.onUpdateShift,
+    this.onCopyShift,
+    this.onPasteTarget,
+    this.clipboardAvailable = false,
+  });
+
+  @override
+  State<WeeklyScheduleView> createState() => _WeeklyScheduleViewState();
+}
+
+class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
+  ShiftPlaceholder? _selectedShift;
+  DateTime? _selectedTargetDay;
+  int? _selectedTargetEmployeeId;
+  late ScrollController _scrollController;
+  final EmployeeAvailabilityDao _availabilityDao = EmployeeAvailabilityDao();
+  final TimeOffDao _timeOffDao = TimeOffDao();
+  final ShiftTemplateDao _shiftTemplateDao = ShiftTemplateDao();
+  final JobCodeSettingsDao _jobCodeDao = JobCodeSettingsDao();
+  final Map<String, Map<String, dynamic>> _availabilityCache = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = ScrollController();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Widget _buildTemplateDialog({
+    required DateTime day,
+    required int employeeId,
+    required List<ShiftTemplate> templates,
+    required int defaultHours,
+    required Color bannerColor,
+    required String reason,
+    required String type,
+    required bool isAvailable,
+  }) {
+    final times = _allowedTimes();
+    int selStart = 0;
+    int selEnd = 16;
+    ShiftTemplate? selectedTemplate;
+
+    return StatefulBuilder(builder: (context, setDialogState) {
+      return AlertDialog(
+        title: const Text('Add Shift'),
+        content: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (templates.isNotEmpty)
+              Container(
+                width: 140,
+                padding: const EdgeInsets.only(right: 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text('Templates:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                    const SizedBox(height: 8),
+                    ...templates.map((template) {
+                      final parts = template.startTime.split(':');
+                      final startHour = int.parse(parts[0]);
+                      final startMin = int.parse(parts[1]);
+                      final endTime = DateTime(2000, 1, 1, startHour, startMin)
+                          .add(Duration(hours: defaultHours));
+                      final endTimeStr = '${endTime.hour.toString().padLeft(2, '0')}:${endTime.minute.toString().padLeft(2, '0')}';
+
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            backgroundColor: selectedTemplate == template ? Colors.blue.withOpacity(0.1) : null,
+                            side: BorderSide(
+                              color: selectedTemplate == template ? Colors.blue : Colors.grey,
+                              width: selectedTemplate == template ? 2 : 1,
+                            ),
+                          ),
+                          onPressed: () {
+                            int startIdx = times.indexWhere((t) => t.hour == startHour && t.minute == startMin);
+                            if (startIdx == -1) startIdx = 0;
+                            
+                            int endIdx = startIdx + (defaultHours * 4);
+                            if (endIdx >= times.length) endIdx = times.length - 1;
+
+                            setDialogState(() {
+                              selectedTemplate = template;
+                              selStart = startIdx;
+                              selEnd = endIdx;
+                            });
+                          },
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(template.templateName, style: const TextStyle(fontSize: 11)),
+                              const SizedBox(height: 2),
+                              Text(
+                                '${template.startTime}-$endTimeStr',
+                                style: const TextStyle(fontSize: 10, color: Colors.grey),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ],
+                ),
+              ),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: bannerColor.withOpacity(0.2),
+                      border: Border.all(color: bannerColor),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          type == 'time-off' ? Icons.event_busy : (isAvailable ? Icons.check_circle : Icons.warning),
+                          color: bannerColor,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            reason,
+                            style: TextStyle(color: bannerColor.withOpacity(0.9), fontSize: 12),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  DropdownButton<int>(
+                    value: selStart,
+                    isExpanded: true,
+                    items: List.generate(times.length, (i) => DropdownMenuItem(value: i, child: Text(_formatTimeOfDay(times[i])))),
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setDialogState(() {
+                        selStart = v;
+                        if (selEnd < selStart) selEnd = selStart;
+                        selectedTemplate = null;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  DropdownButton<int>(
+                    value: selEnd,
+                    isExpanded: true,
+                    items: List.generate(times.length, (i) => DropdownMenuItem(value: i, child: Text(_formatTimeOfDay(times[i])))),
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setDialogState(() {
+                        selEnd = v;
+                        selectedTemplate = null;
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () {
+              final newStart = _timeOfDayToDateTime(day, times[selStart]);
+              final newEnd = _timeOfDayToDateTime(day, times[selEnd]);
+              if (!newEnd.isAfter(newStart)) {
+                Navigator.pop(context, [newStart, newStart.add(const Duration(hours: 1))]);
+              } else {
+                Navigator.pop(context, [newStart, newEnd]);
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      autofocus: true,
+      child: Shortcuts(
+        shortcuts: <LogicalKeySet, Intent>{
+          LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyC): const CopyIntent(),
+          LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyV): const PasteIntent(),
+        },
+        child: Actions(
+          actions: <Type, Action<Intent>>{
+            CopyIntent: CallbackAction<CopyIntent>(onInvoke: (intent) {
+              if (_selectedShift != null && widget.onCopyShift != null) {
+                widget.onCopyShift!(_selectedShift!);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Shift copied'), duration: Duration(seconds: 1)),
+                );
+              }
+              return null;
+            }),
+            PasteIntent: CallbackAction<PasteIntent>(onInvoke: (intent) {
+              if (widget.onPasteTarget != null && _selectedTargetDay != null && _selectedTargetEmployeeId != null) {
+                if (widget.clipboardAvailable) {
+                  widget.onPasteTarget!(_selectedTargetDay!, _selectedTargetEmployeeId!);
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('No shift copied to paste')),
+                  );
+                }
+              }
+              return null;
+            })
+          },
+          child: _buildContent(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContent() {
+    final days = _weekDays();
+
+    // Calculate cell width based on available space
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final employeeColumnWidth = 160.0;
+        final availableWidth = constraints.maxWidth - employeeColumnWidth;
+        final cellWidth = (availableWidth / days.length).clamp(80.0, 150.0);
+
+        // Header row for days
+        final dayHeaders = Row(
+          children: days.map((d) => SizedBox(
+            width: cellWidth, 
+            height: 40, 
+            child: Center(child: Text('${_dayOfWeekAbbr(d)} ${d.month}/${d.day}'))
+          )).toList(),
+        );
+
+        return Column(
+          children: [
+            Row(children: [
+              SizedBox(width: employeeColumnWidth, height: 40), 
+              Expanded(child: dayHeaders)
+            ]),
+            Expanded(
+              child: Row(
+                children: [
+                  // Scrollable content (employee list + grid together)
+                  Expanded(
+                    child: SingleChildScrollView(
+                      controller: _scrollController,
+                      scrollDirection: Axis.vertical,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Fixed employee column
+                          SizedBox(
+                            width: employeeColumnWidth,
+                            child: Column(
+                              children: widget.employees.map((e) {
+                                return SizedBox(
+                                  height: 60,
+                                  child: Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(left: 8),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          CircleAvatar(
+                                            radius: 16,
+                                            child: Text(
+                                              e.name.isNotEmpty ? e.name[0] : '?',
+                                              style: const TextStyle(fontSize: 14),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Text(e.name),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                          ),
+
+                          // Grid columns
+                          ...days.map((d) {
+                            return SizedBox(
+                              width: cellWidth,
+                              child: Column(
+                              children: widget.employees.map((e) {
+                                final shiftsForCell = widget.shifts.where((s) => 
+                                  s.employeeId == e.id && 
+                                  s.start.year == d.year && 
+                                  s.start.month == d.month && 
+                                  s.start.day == d.day
+                                ).toList();
+                                
+                                final has = shiftsForCell.isNotEmpty;
+                                
+                                if (!has) {
+                                  final isTargetSelected = _selectedTargetDay != null && 
+                                      _selectedTargetDay == d && 
+                                      _selectedTargetEmployeeId == e.id;
+                                  final clipboardAvailable = widget.clipboardAvailable;
+
+                                  return GestureDetector(
+                                    onTap: () {
+                                      if (widget.clipboardAvailable && widget.onPasteTarget != null) {
+                                        // Paste if clipboard has data
+                                        widget.onPasteTarget!(d, e.id!);
+                                      } else {
+                                        // Otherwise just select the cell
+                                        setState(() {
+                                          _selectedTargetDay = d;
+                                          _selectedTargetEmployeeId = e.id;
+                                          _selectedShift = null;
+                                        });
+                                      }
+                                    },
+                                    onDoubleTap: () async {
+                                      // Create a new shift on double-click with availability check
+                                      await _showAddShiftDialogWithAvailability(context, d, e.id!);
+                                    },
+                                    onLongPress: () {
+                                      if (widget.clipboardAvailable && widget.onPasteTarget != null) {
+                                        widget.onPasteTarget!(d, e.id!);
+                                      } else {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(content: Text('No shift copied to paste')),
+                                        );
+                                      }
+                                    },
+                                    onSecondaryTapDown: (details) {
+                                      _showEmptyCellContextMenu(context, d, e.id!, position: details.globalPosition);
+                                    },
+                                    child: FutureBuilder<Map<String, dynamic>>(
+                                      future: _checkAvailability(e.id!, d),
+                                      builder: (context, snapshot) {
+                                        bool showDash = false;
+                                        if (snapshot.hasData) {
+                                          final type = snapshot.data!['type'] as String;
+                                          final available = snapshot.data!['available'] as bool;
+                                          if (type == 'time-off' || !available) {
+                                            showDash = true;
+                                          }
+                                        }
+
+                                        return Container(
+                                          height: 60,
+                                          alignment: Alignment.center,
+                                          decoration: BoxDecoration(
+                                            border: Border.all(
+                                              color: isTargetSelected 
+                                                ? Colors.blue 
+                                                : Theme.of(context).dividerColor,
+                                              width: isTargetSelected ? 2.5 : 1,
+                                            ),
+                                            color: isTargetSelected 
+                                              ? Colors.blue.withAlpha(13) 
+                                              : null,
+                                          ),
+                                          child: clipboardAvailable && isTargetSelected 
+                                          ? Icon(Icons.content_paste, color: Colors.blue.withAlpha(128), size: 20)
+                                            : showDash
+                                              ? const Text('-', style: TextStyle(fontSize: 24, color: Colors.grey))
+                                              : null,
+                                        );
+                                      },
+                                    ),
+                                  );
+                                }
+
+                                final s = shiftsForCell.first;
+                                final startLabel = _formatTimeOfDay(TimeOfDay(hour: s.start.hour, minute: s.start.minute));
+                                final endLabel = _formatTimeOfDay(TimeOfDay(hour: s.end.hour, minute: s.end.minute));
+                                final isShiftSelected = _selectedShift != null && 
+                                    _selectedShift!.employeeId == s.employeeId && 
+                                    _selectedShift!.start == s.start;
+
+                                return GestureDetector(
+                                  onTap: () {
+                                    setState(() {
+                                      _selectedShift = s;
+                                      _selectedTargetDay = null;
+                                      _selectedTargetEmployeeId = null;
+                                    });
+                                  },
+                                  onDoubleTap: () async {
+                                    final res = await _showEditDialog(context, d, s);
+                                    if (res != null && widget.onUpdateShift != null) {
+                                      widget.onUpdateShift!(s, res[0], res[1]);
+                                    }
+                                  },
+                                  onLongPress: () {
+                                    setState(() {
+                                      _selectedShift = s;
+                                      _selectedTargetDay = null;
+                                      _selectedTargetEmployeeId = null;
+                                    });
+                                    _showShiftContextMenu(context, s);
+                                  },
+                                  onSecondaryTapDown: (details) {
+                                    setState(() {
+                                      _selectedShift = s;
+                                      _selectedTargetDay = null;
+                                      _selectedTargetEmployeeId = null;
+                                    });
+                                    _showShiftContextMenu(context, s, position: details.globalPosition);
+                                  },
+                                  child: Container(
+                                    height: 60,
+                                    alignment: Alignment.center,
+                                    decoration: BoxDecoration(
+                                      border: Border.all(
+                                        color: isShiftSelected ? Colors.blue : Theme.of(context).dividerColor,
+                                        width: isShiftSelected ? 2.5 : 1,
+                                      ),
+                                      color: isShiftSelected ? Colors.blue.withAlpha(38) : null,
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        _isLabelOnly(s.text)
+                                          ? _labelText(s.text)
+                                          : '$startLabel - $endLabel',
+                                        style: TextStyle(
+                                          fontWeight: isShiftSelected ? FontWeight.bold : FontWeight.normal,
+                                          color: Theme.of(context).brightness == Brightness.dark 
+                                            ? Colors.white 
+                                            : Colors.black87,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
+                  ),
+                ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  List<DateTime> _weekDays() {
+    // Start from Sunday: weekday % 7 gives us Sunday=0, Monday=1, etc.
+    final sunday = widget.date.subtract(Duration(days: widget.date.weekday % 7));
+    return List.generate(7, (i) => DateTime(sunday.year, sunday.month, sunday.day + i));
+  }
+
+  List<TimeOfDay> _allowedTimes() {
+    // 4:30 AM is allowed, then every whole hour from 5:00 through 23:00, and 0:00 and 1:00 (next day)
+    final List<TimeOfDay> list = [];
+    list.add(const TimeOfDay(hour: 4, minute: 30));
+    for (int h = 5; h <= 23; h++) {
+      list.add(TimeOfDay(hour: h, minute: 0));
+    }
+    list.add(const TimeOfDay(hour: 0, minute: 0));
+    list.add(const TimeOfDay(hour: 1, minute: 0));
+    return list;
+  }
+
+  void _showShiftContextMenu(BuildContext context, ShiftPlaceholder shift, {Offset? position}) async {
+    final result = await showMenu<String>(
+      context: context,
+      position: position != null 
+        ? RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy)
+        : RelativeRect.fromLTRB(100, 100, 100, 100),
+      items: [
+        const PopupMenuItem(value: 'copy', child: Text('Copy')),
+        const PopupMenuItem(value: 'delete', child: Text('Delete')),
+      ],
+    );
+
+    if (!mounted || !context.mounted) return;
+
+    if (result == 'copy' && widget.onCopyShift != null) {
+      widget.onCopyShift!(shift);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Shift copied'), duration: Duration(seconds: 1)),
+      );
+    } else if (result == 'delete') {
+      if (widget.onUpdateShift != null) {
+        widget.onUpdateShift!(shift, shift.start, shift.start);
+      }
+    }
+  }
+
+  void _showEmptyCellContextMenu(BuildContext context, DateTime day, int employeeId, {Offset? position}) async {
+    final result = await showMenu<String>(
+      context: context,
+      position: position != null 
+        ? RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy)
+        : RelativeRect.fromLTRB(100, 100, 100, 100),
+      items: [
+        const PopupMenuItem(value: 'off', child: Text('Mark as Off')),
+      ],
+    );
+
+    if (!mounted || !context.mounted) return;
+
+    if (result == 'off' && widget.onUpdateShift != null) {
+      // Create an OFF shift that spans from midnight to 11:59pm so it's a valid shift
+      final offShift = ShiftPlaceholder(
+        employeeId: employeeId,
+        start: DateTime(day.year, day.month, day.day, 0, 0),
+        end: DateTime(day.year, day.month, day.day, 23, 59),
+        text: 'Off',
+      );
+      // Use a temporary placeholder (start==end) to signal this is a new shift
+      final tempShift = ShiftPlaceholder(
+        employeeId: employeeId,
+        start: DateTime(day.year, day.month, day.day, 0, 0),
+        end: DateTime(day.year, day.month, day.day, 0, 0),
+        text: 'Off',
+      );
+      widget.onUpdateShift!(tempShift, offShift.start, offShift.end);
+    }
+  }
+
+  DateTime _timeOfDayToDateTime(DateTime day, TimeOfDay tod) {
+    // Times with hour 0 or 1 are considered next-day times
+    if (tod.hour == 0 || tod.hour == 1) {
+      return DateTime(day.year, day.month, day.day, tod.hour, tod.minute).add(const Duration(days: 1));
+    }
+    return DateTime(day.year, day.month, day.day, tod.hour, tod.minute);
+  }
+
+  String _formatTimeOfDay(TimeOfDay t) {
+    final h = t.hourOfPeriod == 0 ? 12 : t.hourOfPeriod;
+    final suffix = t.period == DayPeriod.am ? 'AM' : 'PM';
+    if (t.minute == 0) {
+      return '$h $suffix';
+    }
+    final mm = t.minute.toString().padLeft(2, '0');
+    return '$h:$mm $suffix';
+  }
+
+  String _dayOfWeekAbbr(DateTime date) {
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    return days[date.weekday % 7];
+  }
+
+  Future<Map<String, dynamic>> _checkAvailability(int employeeId, DateTime date) async {
+    final cacheKey = '$employeeId-${date.year}-${date.month}-${date.day}';
+    if (_availabilityCache.containsKey(cacheKey)) {
+      return _availabilityCache[cacheKey]!;
+    }
+
+    // Priority 1: Check time-off first
+    final timeOffList = await _timeOffDao.getAllTimeOff();
+    final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+    final hasTimeOff = timeOffList.any((t) => 
+      t.employeeId == employeeId &&
+      '${t.date.year}-${t.date.month.toString().padLeft(2, '0')}-${t.date.day.toString().padLeft(2, '0')}' == dateStr
+    );
+    
+    if (hasTimeOff) {
+      final result = {'available': false, 'reason': 'Time off scheduled', 'type': 'time-off'};
+      _availabilityCache[cacheKey] = result;
+      return result;
+    }
+
+    // Priority 2: Check availability patterns
+    final result = await _availabilityDao.isAvailable(employeeId, date, null, null);
+    _availabilityCache[cacheKey] = result;
+    return result;
+  }
+
+  Future<void> _showAddShiftDialogWithAvailability(BuildContext context, DateTime day, int employeeId) async {
+    // Get employee job code
+    final employee = widget.employees.firstWhere((e) => e.id == employeeId);
+    final jobCode = employee.jobCode;
+
+    // Load templates for this job code
+    await _shiftTemplateDao.insertDefaultTemplatesIfMissing(jobCode);
+    final templates = await _shiftTemplateDao.getTemplatesForJobCode(jobCode);
+
+    // Load job code settings for duration
+    final jobCodeSettings = await _jobCodeDao.getByCode(jobCode);
+    final defaultHours = jobCodeSettings?.defaultScheduledHours ?? 8;
+
+    // Check availability
+    final availability = await _checkAvailability(employeeId, day);
+    final isAvailable = availability['available'] as bool;
+    final reason = availability['reason'] as String;
+    final type = availability['type'] as String;
+
+    Color bannerColor = Colors.green;
+    if (type == 'time-off') {
+      bannerColor = Colors.red;
+    } else if (!isAvailable) {
+      bannerColor = Colors.orange;
+    }
+
+    if (!context.mounted) return;
+
+    final res = await showDialog<List<DateTime>>(
+      context: context,
+      builder: (context) => _buildTemplateDialog(
+        day: day,
+        employeeId: employeeId,
+        templates: templates,
+        defaultHours: defaultHours,
+        bannerColor: bannerColor,
+        reason: reason,
+        type: type,
+        isAvailable: isAvailable,
+      ),
+    );
+
+    if (res != null && widget.onUpdateShift != null) {
+      final tempShift = ShiftPlaceholder(
+        employeeId: employeeId,
+        start: DateTime(day.year, day.month, day.day, 0, 0),
+        end: DateTime(day.year, day.month, day.day, 0, 0),
+        text: 'Shift',
+      );
+      widget.onUpdateShift!(tempShift, res[0], res[1]);
+    }
+  }
+
+  Future<List<DateTime>?> _showEditDialog(BuildContext context, DateTime day, ShiftPlaceholder shift) async {
+    final times = _allowedTimes();
+    int startIdx = 0;
+    int endIdx = 0;
+    for (int i = 0; i < times.length; i++) {
+      final t = times[i];
+      final dt = _timeOfDayToDateTime(day, t);
+      if (dt.hour == shift.start.hour && dt.minute == shift.start.minute && dt.day == shift.start.day) startIdx = i;
+      if (dt.hour == shift.end.hour && dt.minute == shift.end.minute && dt.day == shift.end.day) endIdx = i;
+    }
+
+    int selStart = startIdx;
+    int selEnd = endIdx;
+
+    final result = await showDialog<List<DateTime>>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(builder: (context, setState) {
+          return AlertDialog(
+            title: const Text('Edit Shift Time'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButton<int>(
+                  value: selStart,
+                  items: List.generate(times.length, (i) => DropdownMenuItem(value: i, child: Text(_formatTimeOfDay(times[i])))),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() => selStart = v);
+                  },
+                ),
+                const SizedBox(height: 12),
+                DropdownButton<int>(
+                  value: selEnd,
+                  items: List.generate(times.length, (i) => DropdownMenuItem(value: i, child: Text(_formatTimeOfDay(times[i])))),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() => selEnd = v);
+                  },
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+              TextButton(
+                onPressed: () {
+                  final newStart = _timeOfDayToDateTime(day, times[selStart]);
+                  final newEnd = _timeOfDayToDateTime(day, times[selEnd]);
+                  Navigator.pop(context, [newStart, newEnd]);
+                },
+                child: const Text('OK'),
+              ),
+            ],
+          );
+        });
+      },
+    );
+
+    return result;
+  }
+}
+
+// ====================
+// MONTHLY SCHEDULE VIEW
+// ====================
+
+class MonthlyScheduleView extends StatefulWidget {
+  final DateTime date;
+  final List<Employee> employees;
+  final List<ShiftPlaceholder> shifts;
+  final void Function(ShiftPlaceholder oldShift, DateTime newStart, DateTime newEnd)? onUpdateShift;
+
+  const MonthlyScheduleView({
+    super.key,
+    required this.date,
+    required this.employees,
+    this.shifts = const [],
+    this.onUpdateShift,
+  });
+
+  @override
+  State<MonthlyScheduleView> createState() => _MonthlyScheduleViewState();
+}
+
+class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
+  ShiftPlaceholder? _selectedShift;
+
+  List<List<DateTime?>> _buildCalendarWeeks() {
+    // Get first and last day of month
+    final firstDayOfMonth = DateTime(widget.date.year, widget.date.month, 1);
+    final lastDayOfMonth = DateTime(widget.date.year, widget.date.month + 1, 0);
+    
+    // Find the Sunday before or on the first day
+    final startDate = firstDayOfMonth.subtract(Duration(days: firstDayOfMonth.weekday % 7));
+    
+    // Build weeks (5 or 6 weeks to cover the month)
+    final weeks = <List<DateTime?>>[];
+    DateTime currentDate = startDate;
+    
+    while (currentDate.isBefore(lastDayOfMonth) || currentDate.month == lastDayOfMonth.month) {
+      final week = <DateTime?>[];
+      for (int i = 0; i < 7; i++) {
+        week.add(currentDate);
+        currentDate = currentDate.add(const Duration(days: 1));
+      }
+      weeks.add(week);
+      
+      // Stop after we've passed the last day of the month
+      if (weeks.length >= 6 || (currentDate.month != widget.date.month && weeks.length >= 5)) {
+        break;
+      }
+    }
+    
+    return weeks;
+  }
+
+  String _formatTimeOfDay(TimeOfDay t) {
+    final h = t.hourOfPeriod == 0 ? 12 : t.hourOfPeriod;
+    final mm = t.minute.toString().padLeft(2, '0');
+    final suffix = t.period == DayPeriod.am ? 'AM' : 'PM';
+    return '$h:$mm $suffix';
+  }
+
+  void _showShiftContextMenu(BuildContext context, ShiftPlaceholder shift, Offset? position) async {
+    final result = await showMenu<String>(
+      context: context,
+      position: position != null 
+        ? RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy)
+        : const RelativeRect.fromLTRB(100, 100, 100, 100),
+      items: const [
+        PopupMenuItem(value: 'edit', child: Text('Edit Shift')),
+        PopupMenuItem(value: 'delete', child: Text('Delete Shift')),
+      ],
+    );
+
+    if (!mounted || !context.mounted) return;
+
+    if (result == 'edit') {
+      _showEditDialog(context, shift);
+    } else if (result == 'delete') {
+      if (widget.onUpdateShift != null) {
+        widget.onUpdateShift!(shift, shift.start, shift.start);
+      }
+    }
+  }
+
+  Future<void> _showEditDialog(BuildContext context, ShiftPlaceholder shift) async {
+    final times = _allowedTimes();
+    int selStart = times.indexWhere((t) => t.hour == shift.start.hour && t.minute == shift.start.minute);
+    int selEnd = times.indexWhere((t) => t.hour == shift.end.hour && t.minute == shift.end.minute);
+    if (selStart == -1) selStart = 0;
+    if (selEnd == -1) selEnd = times.length - 1;
+
+    final result = await showDialog<List<DateTime>>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(builder: (context, setDialogState) {
+          return AlertDialog(
+            title: const Text('Edit Shift'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButton<int>(
+                  value: selStart,
+                  items: times.asMap().entries.map((e) {
+                    return DropdownMenuItem(value: e.key, child: Text(_formatTimeOfDay(e.value)));
+                  }).toList(),
+                  onChanged: (v) {
+                    setDialogState(() {
+                      selStart = v!;
+                      if (selStart >= selEnd) selEnd = (selStart + 1).clamp(0, times.length - 1);
+                    });
+                  },
+                ),
+                const Text(' to '),
+                DropdownButton<int>(
+                  value: selEnd,
+                  items: times.asMap().entries.map((e) {
+                    return DropdownMenuItem(value: e.key, child: Text(_formatTimeOfDay(e.value)));
+                  }).toList(),
+                  onChanged: (v) {
+                    setDialogState(() {
+                      selEnd = v!;
+                      if (selEnd <= selStart) selStart = (selEnd - 1).clamp(0, times.length - 1);
+                    });
+                  },
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+              TextButton(
+                onPressed: () {
+                  final day = DateTime(shift.start.year, shift.start.month, shift.start.day);
+                  final newStart = _timeOfDayToDateTime(day, times[selStart]);
+                  final newEnd = _timeOfDayToDateTime(day, times[selEnd]);
+                  Navigator.pop(context, [newStart, newEnd]);
+                },
+                child: const Text('OK'),
+              ),
+            ],
+          );
+        });
+      },
+    );
+
+    if (result != null && widget.onUpdateShift != null) {
+      widget.onUpdateShift!(shift, result[0], result[1]);
+    }
+  }
+
+  List<TimeOfDay> _allowedTimes() {
+    final List<TimeOfDay> list = [];
+    list.add(const TimeOfDay(hour: 4, minute: 30));
+    for (int h = 5; h <= 23; h++) {
+      list.add(TimeOfDay(hour: h, minute: 0));
+    }
+    list.add(const TimeOfDay(hour: 0, minute: 0));
+    list.add(const TimeOfDay(hour: 1, minute: 0));
+    return list;
+  }
+
+  DateTime _timeOfDayToDateTime(DateTime day, TimeOfDay tod) {
+    DateTime result = DateTime(day.year, day.month, day.day, tod.hour, tod.minute);
+    if (tod.hour == 0 || tod.hour == 1) {
+      result = result.add(const Duration(days: 1));
+    }
+    return result;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final weeks = _buildCalendarWeeks();
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final dayColumnWidth = 120.0;
+        final availableWidth = constraints.maxWidth - dayColumnWidth;
+        final cellWidth = widget.employees.isNotEmpty 
+            ? (availableWidth / widget.employees.length).clamp(80.0, 200.0)
+            : 100.0;
+
+        return Column(
+          children: [
+            // Header row with employee names
+            Container(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primaryContainer,
+                border: Border.all(color: Theme.of(context).dividerColor, width: 2),
+              ),
+              child: Row(
+                children: [
+                  // Empty corner cell
+                  SizedBox(
+                    width: dayColumnWidth,
+                    height: 60,
+                    child: const Center(
+                      child: Text('Day', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                    ),
+                  ),
+                  // Employee headers
+                  ...widget.employees.map((employee) => Container(
+                    width: cellWidth,
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                    decoration: BoxDecoration(
+                      border: Border(left: BorderSide(color: Theme.of(context).dividerColor)),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        CircleAvatar(
+                          radius: 14,
+                          child: Text(
+                            employee.name.isNotEmpty ? employee.name[0] : '?',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          employee.name,
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  )),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            // Weeks with days and employee cells
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                itemCount: weeks.length,
+                itemBuilder: (context, weekIndex) {
+                  final week = weeks[weekIndex];
+                  
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Theme.of(context).dividerColor, width: 2),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      children: week.asMap().entries.map((entry) {
+                        final dayIndex = entry.key;
+                        final day = entry.value;
+                        
+                        if (day == null) {
+                          return const SizedBox.shrink();
+                        }
+
+                        final isCurrentMonth = day.month == widget.date.month;
+                        final isWeekend = day.weekday == DateTime.saturday || day.weekday == DateTime.sunday;
+                        final dayName = dayNames[day.weekday % 7];
+                        
+                        return Container(
+                          decoration: BoxDecoration(
+                            border: dayIndex < 6 
+                                ? Border(bottom: BorderSide(color: Theme.of(context).dividerColor))
+                                : null,
+                          ),
+                          child: IntrinsicHeight(
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                // Day label column
+                                Container(
+                                  width: dayColumnWidth,
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    border: Border(right: BorderSide(color: Theme.of(context).dividerColor, width: 2)),
+                                    color: isWeekend
+                                        ? Theme.of(context).colorScheme.primaryContainer.withAlpha(51)
+                                        : !isCurrentMonth
+                                            ? Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(25)
+                                            : null,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Text(
+                                        dayName,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                      Text(
+                                        '${day.month}/${day.day}',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: !isCurrentMonth
+                                              ? Colors.grey
+                                              : day.day == DateTime.now().day && 
+                                                day.month == DateTime.now().month && 
+                                                day.year == DateTime.now().year
+                                                  ? Theme.of(context).colorScheme.primary
+                                                  : null,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                // Employee cells for this day
+                                ...widget.employees.map((employee) {
+                                  final shiftsForCell = widget.shifts.where((s) =>
+                                    s.employeeId == employee.id &&
+                                    s.start.year == day.year &&
+                                    s.start.month == day.month &&
+                                    s.start.day == day.day
+                                  ).toList();
+
+                                  return Container(
+                                    width: cellWidth,
+                                    padding: const EdgeInsets.all(6),
+                                    decoration: BoxDecoration(
+                                      border: Border(left: BorderSide(color: Theme.of(context).dividerColor)),
+                                      color: !isCurrentMonth
+                                          ? Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(25)
+                                          : isWeekend
+                                              ? Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(51)
+                                              : null,
+                                    ),
+                                    child: shiftsForCell.isEmpty
+                                        ? const Center(
+                                            child: Text('-', style: TextStyle(color: Colors.grey, fontSize: 16)),
+                                          )
+                                        : Column(
+                                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: shiftsForCell.map((shift) {
+                                              final isSelected = _selectedShift == shift;
+                                              final startLabel = _formatTimeOfDay(TimeOfDay(hour: shift.start.hour, minute: shift.start.minute));
+                                              final endLabel = _formatTimeOfDay(TimeOfDay(hour: shift.end.hour, minute: shift.end.minute));
+
+                                              return GestureDetector(
+                                                onTap: () {
+                                                  setState(() {
+                                                    _selectedShift = isSelected ? null : shift;
+                                                  });
+                                                },
+                                                onDoubleTap: () {
+                                                  _showEditDialog(context, shift);
+                                                },
+                                                onSecondaryTapDown: (details) {
+                                                  setState(() {
+                                                    _selectedShift = shift;
+                                                  });
+                                                  _showShiftContextMenu(context, shift, details.globalPosition);
+                                                },
+                                                child: Container(
+                                                  margin: const EdgeInsets.only(bottom: 3),
+                                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                                                  decoration: BoxDecoration(
+                                                    color: isSelected 
+                                                        ? Colors.blue.withAlpha(128)
+                                                        : Theme.of(context).colorScheme.primaryContainer.withAlpha(128),
+                                                    borderRadius: BorderRadius.circular(4),
+                                                    border: isSelected 
+                                                        ? Border.all(color: Colors.blue, width: 2)
+                                                        : null,
+                                                  ),
+                                                  child: Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.center,
+                                                    children: [
+                                                      if (_isLabelOnly(shift.text))
+                                                        Text(
+                                                          _labelText(shift.text),
+                                                          style: TextStyle(
+                                                            fontSize: 11,
+                                                            fontWeight: FontWeight.bold,
+                                                            color: Colors.red[700],
+                                                          ),
+                                                          textAlign: TextAlign.center,
+                                                        )
+                                                      else ...[
+                                                        Text(
+                                                          '$startLabel-',
+                                                          style: const TextStyle(
+                                                            fontSize: 10,
+                                                            fontWeight: FontWeight.w600,
+                                                          ),
+                                                          textAlign: TextAlign.center,
+                                                        ),
+                                                        Text(
+                                                          endLabel,
+                                                          style: const TextStyle(
+                                                            fontSize: 10,
+                                                            fontWeight: FontWeight.w600,
+                                                          ),
+                                                          textAlign: TextAlign.center,
+                                                        ),
+                                                        if (shift.text.isNotEmpty)
+                                                          Text(
+                                                            shift.text,
+                                                            style: const TextStyle(fontSize: 9),
+                                                            maxLines: 1,
+                                                            overflow: TextOverflow.ellipsis,
+                                                            textAlign: TextAlign.center,
+                                                          ),
+                                                      ],
+                                                    ],
+                                                  ),
+                                                ),
+                                              );
+                                            }).toList(),
+                                          ),
+                                  );
+                                }),
+                              ],
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+// Public simple shift placeholder for rendering
+class ShiftPlaceholder {
+  final int employeeId;
+  final DateTime start;
+  final DateTime end;
+  final String text;
+
+  ShiftPlaceholder({required this.employeeId, required this.start, required this.end, required this.text});
+}
+

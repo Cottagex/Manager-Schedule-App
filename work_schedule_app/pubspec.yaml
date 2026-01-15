@@ -1,0 +1,35 @@
+name: work_schedule_app
+description: "Workforce scheduling and PTO management app."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.7
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Database
+  sqflite: ^2.3.0
+  sqflite_common_ffi:
+    git:
+      url: https://github.com/tekartik/sqflite
+      path: sqflite_common_ffi
+
+  # Utilities
+  path: ^1.8.3
+  shared_preferences: ^2.2.2
+  uuid: ^4.5.2
+
+  # UI
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
