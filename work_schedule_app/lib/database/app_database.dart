@@ -109,6 +109,21 @@ Future<void> _onCreate(Database db, int version) async {
     ON shifts(employeeId, startTime)
   ''');
 
+  await db.execute('''
+    CREATE TABLE schedule_notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL UNIQUE,
+      note TEXT NOT NULL,
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL
+    )
+  ''');
+
+  await db.execute('''
+    CREATE INDEX IF NOT EXISTS idx_schedule_notes_date 
+    ON schedule_notes(date)
+  ''');
+
   log("✅ Schema created", name: 'AppDatabase');
 } 
 
@@ -141,7 +156,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 5,
+      version: 6,
       onCreate: _onCreate,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -196,6 +211,22 @@ class AppDatabase {
           await db.execute('''
             CREATE INDEX IF NOT EXISTS idx_shifts_employee_date 
             ON shifts(employeeId, startTime)
+          ''');
+        }
+        if (oldVersion < 6) {
+          // Add schedule_notes table
+          await db.execute('''
+            CREATE TABLE schedule_notes (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              date TEXT NOT NULL UNIQUE,
+              note TEXT NOT NULL,
+              createdAt TEXT NOT NULL,
+              updatedAt TEXT NOT NULL
+            )
+          ''');
+          await db.execute('''
+            CREATE INDEX IF NOT EXISTS idx_schedule_notes_date 
+            ON schedule_notes(date)
           ''');
         }
       },

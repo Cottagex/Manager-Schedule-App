@@ -6,10 +6,12 @@ import '../../database/employee_availability_dao.dart';
 import '../../database/shift_template_dao.dart';
 import '../../database/job_code_settings_dao.dart';
 import '../../database/shift_dao.dart';
+import '../../database/schedule_note_dao.dart';
 import '../../models/employee.dart';
 import '../../models/time_off_entry.dart';
 import '../../models/shift_template.dart';
 import '../../models/shift.dart';
+import '../../models/schedule_note.dart';
 import '../../services/schedule_pdf_service.dart';
 
 // Custom intents for keyboard shortcuts
@@ -54,9 +56,11 @@ class _ScheduleViewState extends State<ScheduleView> {
   final EmployeeDao _employeeDao = EmployeeDao();
   final TimeOffDao _timeOffDao = TimeOffDao();
   final ShiftDao _shiftDao = ShiftDao();
+  final ScheduleNoteDao _noteDao = ScheduleNoteDao();
   List<Employee> _employees = [];
   List<Employee> _filteredEmployees = [];
   List<ShiftPlaceholder> _shifts = [];
+  Map<DateTime, ScheduleNote> _notes = {};
 
   // Filter state
   String _filterType = 'all'; // 'all', 'jobCode', 'employee'
@@ -122,10 +126,19 @@ class _ScheduleViewState extends State<ScheduleView> {
     }
     final workShifts = _shiftsToPlaceholders(dbShifts);
     
+    // Load notes based on current view
+    Map<DateTime, ScheduleNote> notes;
+    if (_mode == ScheduleMode.monthly) {
+      notes = await _noteDao.getByMonth(_date.year, _date.month);
+    } else {
+      notes = await _noteDao.getByWeek(_date);
+    }
+    
     if (!mounted) return;
     setState(() {
       // Combine database time-off shifts with work shifts from database
       _shifts = [...timeOffShifts, ...workShifts];
+      _notes = notes;
     });
   }
 
@@ -441,11 +454,21 @@ class _ScheduleViewState extends State<ScheduleView> {
       date: _date,
       employees: _filteredEmployees,
       shifts: _shifts,
+      notes: _notes,
       clipboardAvailable: _clipboard != null,
       onCopyShift: (s) {
         setState(() {
           _clipboard = {'start': TimeOfDay(hour: s.start.hour, minute: s.start.minute), 'duration': s.end.difference(s.start), 'text': s.text};
         });
+      },
+      onSaveNote: (day, note) async {
+        final scheduleNote = ScheduleNote(date: day, note: note);
+        await _noteDao.upsert(scheduleNote);
+        await _refreshShifts();
+      },
+      onDeleteNote: (day) async {
+        await _noteDao.deleteByDate(day);
+        await _refreshShifts();
       },
       onPasteTarget: (day, employeeId) async {
         if (_clipboard == null) {
@@ -769,10 +792,13 @@ class WeeklyScheduleView extends StatefulWidget {
   final DateTime date;
   final List<Employee> employees;
   final List<ShiftPlaceholder> shifts;
+  final Map<DateTime, ScheduleNote> notes;
   final void Function(ShiftPlaceholder oldShift, DateTime newStart, DateTime newEnd)? onUpdateShift;
   final void Function(ShiftPlaceholder shift)? onCopyShift;
   final void Function(DateTime day, int employeeId)? onPasteTarget;
   final void Function(ShiftPlaceholder shift, DateTime newDay, int newEmployeeId)? onMoveShift;
+  final void Function(DateTime day, String note)? onSaveNote;
+  final void Function(DateTime day)? onDeleteNote;
   final bool clipboardAvailable;
 
   const WeeklyScheduleView({
@@ -780,10 +806,13 @@ class WeeklyScheduleView extends StatefulWidget {
     required this.date,
     required this.employees,
     this.shifts = const [],
+    this.notes = const {},
     this.onUpdateShift,
     this.onCopyShift,
     this.onPasteTarget,
     this.onMoveShift,
+    this.onSaveNote,
+    this.onDeleteNote,
     this.clipboardAvailable = false,
   });
 
@@ -1024,13 +1053,32 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
         final availableWidth = constraints.maxWidth - employeeColumnWidth;
         final cellWidth = (availableWidth / days.length).clamp(80.0, 150.0);
 
-        // Header row for days
+        // Header row for days with notes indicator
         final dayHeaders = Row(
-          children: days.map((d) => SizedBox(
-            width: cellWidth, 
-            height: 40, 
-            child: Center(child: Text('${_dayOfWeekAbbr(d)} ${d.month}/${d.day}'))
-          )).toList(),
+          children: days.map((d) {
+            final dateKey = DateTime(d.year, d.month, d.day);
+            final hasNote = widget.notes.containsKey(dateKey);
+            final note = widget.notes[dateKey];
+            
+            return SizedBox(
+              width: cellWidth, 
+              height: 40, 
+              child: InkWell(
+                onTap: () => _showNoteDialog(context, d, note?.note),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text('${_dayOfWeekAbbr(d)} ${d.month}/${d.day}'),
+                    if (hasNote)
+                      Tooltip(
+                        message: note?.note ?? '',
+                        child: Icon(Icons.sticky_note_2, size: 14, color: Colors.amber.shade700),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          }).toList(),
         );
 
         return Column(
@@ -1436,6 +1484,67 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
   String _dayOfWeekAbbr(DateTime date) {
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     return days[date.weekday % 7];
+  }
+
+  void _showNoteDialog(BuildContext context, DateTime day, String? existingNote) {
+    final controller = TextEditingController(text: existingNote ?? '');
+    final dateStr = '${_dayOfWeekAbbr(day)}, ${day.month}/${day.day}/${day.year}';
+    
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.sticky_note_2, color: Colors.amber.shade700),
+              const SizedBox(width: 8),
+              Text('Note for $dateStr'),
+            ],
+          ),
+          content: SizedBox(
+            width: 400,
+            child: TextField(
+              controller: controller,
+              maxLines: 5,
+              decoration: const InputDecoration(
+                hintText: 'Enter a note for this day...',
+                border: OutlineInputBorder(),
+              ),
+              autofocus: true,
+            ),
+          ),
+          actions: [
+            if (existingNote != null && existingNote.isNotEmpty)
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  if (widget.onDeleteNote != null) {
+                    widget.onDeleteNote!(day);
+                  }
+                },
+                style: TextButton.styleFrom(foregroundColor: Colors.red),
+                child: const Text('Delete Note'),
+              ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final text = controller.text.trim();
+                Navigator.pop(ctx);
+                if (text.isNotEmpty && widget.onSaveNote != null) {
+                  widget.onSaveNote!(day, text);
+                } else if (text.isEmpty && widget.onDeleteNote != null) {
+                  widget.onDeleteNote!(day);
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<Map<String, dynamic>> _checkAvailability(int employeeId, DateTime date) async {
