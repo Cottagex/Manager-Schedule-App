@@ -821,7 +821,7 @@ class _ScheduleViewState extends State<ScheduleView> {
                       : _mode == ScheduleMode.weekly
                           ? "Week of ${_date.month}/${_date.day}/${_date.year}"
                           : "${_dayOfWeekAbbr(_date)}, ${_monthName(_date.month)} ${_date.day}, ${_date.year}",
-                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
                 ),
                 const SizedBox(width: 8),
                 IconButton(
@@ -3087,6 +3087,7 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
       builder: (context, constraints) {
         final dayColumnWidth = 120.0;
         const groupGapWidth = 12.0;
+        const tablePadding = 40.0; // Extra padding to prevent edge overhang
 
         int jobCodeBreaks = 0;
         for (int i = 1; i < widget.employees.length; i++) {
@@ -3095,7 +3096,7 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
           if (prev != curr) jobCodeBreaks++;
         }
 
-        final availableWidth = constraints.maxWidth - dayColumnWidth;
+        final availableWidth = constraints.maxWidth - dayColumnWidth - tablePadding;
         final effectiveAvailableWidth = (availableWidth - (jobCodeBreaks * groupGapWidth)).clamp(0.0, double.infinity);
         final cellWidth = widget.employees.isNotEmpty 
             ? (effectiveAvailableWidth / widget.employees.length).clamp(80.0, 200.0)
@@ -3141,14 +3142,16 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
           return cells;
         }
 
-        return Scrollbar(
-          controller: _horizontalScrollController,
-          thumbVisibility: true,
-          child: SingleChildScrollView(
+        return Padding(
+          padding: const EdgeInsets.all(12),
+          child: Scrollbar(
             controller: _horizontalScrollController,
-            scrollDirection: Axis.horizontal,
-            child: SizedBox(
-              width: totalWidth,
+            thumbVisibility: true,
+            child: SingleChildScrollView(
+              controller: _horizontalScrollController,
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: totalWidth,
               child: Column(
                 children: [
                   Container(
@@ -3306,6 +3309,7 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
               ),
             ),
           ),
+        ),
         );
       },
     );
