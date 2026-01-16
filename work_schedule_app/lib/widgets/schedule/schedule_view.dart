@@ -3021,12 +3021,18 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
                                     builder: (context, candidateData, rejectedData) {
                                       return GestureDetector(
                                         onTap: shiftsForCell.isEmpty ? () {
-                                          _showEditDialog(context, ShiftPlaceholder(
-                                            employeeId: employee.id!,
-                                            start: DateTime(day.year, day.month, day.day, 9, 0),
-                                            end: DateTime(day.year, day.month, day.day, 17, 0),
-                                            text: '',
-                                          ));
+                                          // If clipboard has data, paste on single click
+                                          if (widget.clipboardAvailable && widget.onPasteTarget != null) {
+                                            widget.onPasteTarget!(day, employee.id!);
+                                          } else {
+                                            // Otherwise show add shift dialog
+                                            _showEditDialog(context, ShiftPlaceholder(
+                                              employeeId: employee.id!,
+                                              start: DateTime(day.year, day.month, day.day, 9, 0),
+                                              end: DateTime(day.year, day.month, day.day, 17, 0),
+                                              text: '',
+                                            ));
+                                          }
                                         } : null,
                                         onSecondaryTapDown: shiftsForCell.isEmpty ? (details) {
                                           _showEmptyCellContextMenu(context, day, employee.id!, details.globalPosition);
