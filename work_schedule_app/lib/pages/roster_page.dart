@@ -19,6 +19,35 @@ class _RosterPageState extends State<RosterPage> {
   final EmployeeDao _employeeDao = EmployeeDao();
   List<Employee> _employees = [];
 
+  void _sortEmployeesInRosterOrder(List<Employee> list) {
+    if (list.isEmpty) return;
+
+    final orderByJobCodeLower = <String, int>{
+      for (final jc in _jobCodes) jc.code.toLowerCase(): jc.sortOrder,
+    };
+
+    int orderFor(String jobCode) => orderByJobCodeLower[jobCode.toLowerCase()] ?? 999999;
+
+    list.sort((a, b) {
+      final aOrder = orderFor(a.jobCode);
+      final bOrder = orderFor(b.jobCode);
+      if (aOrder != bOrder) return aOrder.compareTo(bOrder);
+
+      final jobCodeCmp = a.jobCode.toLowerCase().compareTo(b.jobCode.toLowerCase());
+      if (jobCodeCmp != 0) return jobCodeCmp;
+
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+  }
+
+  void _resortIfPossible() {
+    if (!mounted) return;
+    if (_employees.isEmpty) return;
+    final sorted = List<Employee>.from(_employees);
+    _sortEmployeesInRosterOrder(sorted);
+    setState(() => _employees = sorted);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -31,12 +60,15 @@ class _RosterPageState extends State<RosterPage> {
     await _jobCodeDao.insertDefaultsIfMissing();
     final codes = await _jobCodeDao.getAll();
     setState(() => _jobCodes = codes);
+    _resortIfPossible();
   }
 
   Future<void> _loadEmployees() async {
     // Adjust this to match your actual DAO method
     final list = await _employeeDao.getEmployees();
-    setState(() => _employees = list);
+    final sorted = List<Employee>.from(list);
+    _sortEmployeesInRosterOrder(sorted);
+    setState(() => _employees = sorted);
   }
 
   Future<void> _addEmployee() async {

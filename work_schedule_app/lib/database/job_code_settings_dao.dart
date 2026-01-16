@@ -123,13 +123,8 @@ class JobCodeSettingsDao {
           'SELECT COUNT(*) as c FROM employees WHERE jobCode = ? COLLATE BINARY',
           [k],
         );
-        final tplRes = await txn.rawQuery(
-          'SELECT COUNT(*) as c FROM shift_templates WHERE jobCode = ? COLLATE BINARY',
-          [k],
-        );
         final empCount = (empRes.first['c'] as int?) ?? 0;
-        final tplCount = (tplRes.first['c'] as int?) ?? 0;
-        final score = empCount + tplCount;
+        final score = empCount;
         if (score > bestScore) {
           bestScore = score;
           canonical = k;
@@ -141,12 +136,6 @@ class JobCodeSettingsDao {
 
         await txn.update(
           'employees',
-          {'jobCode': canonical},
-          where: 'jobCode = ? COLLATE BINARY',
-          whereArgs: [k],
-        );
-        await txn.update(
-          'shift_templates',
           {'jobCode': canonical},
           where: 'jobCode = ? COLLATE BINARY',
           whereArgs: [k],
@@ -294,23 +283,17 @@ class JobCodeSettingsDao {
       'SELECT COUNT(*) as c FROM employees WHERE jobCode = ? COLLATE NOCASE',
       [code],
     );
-    final templatesResult = await db.rawQuery(
-      'SELECT COUNT(*) as c FROM shift_templates WHERE jobCode = ? COLLATE NOCASE',
-      [code],
-    );
 
     final employeesCount = (employeesResult.first['c'] as int?) ?? 0;
-    final templatesCount = (templatesResult.first['c'] as int?) ?? 0;
     return {
       'employees': employeesCount,
-      'templates': templatesCount,
+      'templates': 0,
     };
   }
 
   // ------------------------------------------------------------
   // DELETE JOB CODE
   // - If employees reference the code, you must pass reassignEmployeesTo.
-  // - Shift templates for the deleted code are always deleted.
   // Returns:
   //  -1 if job code doesn't exist
   //  -2 if employees exist and no reassignment was provided
@@ -348,13 +331,6 @@ class JobCodeSettingsDao {
           whereArgs: [code],
         );
       }
-
-      // Always delete templates for this job code (prevents orphaned templates)
-      await txn.delete(
-        'shift_templates',
-        where: 'jobCode = ? COLLATE NOCASE',
-        whereArgs: [code],
-      );
 
       await txn.delete(
         tableName,

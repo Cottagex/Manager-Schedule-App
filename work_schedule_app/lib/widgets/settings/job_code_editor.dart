@@ -47,7 +47,6 @@ class _JobCodeEditorState extends State<JobCodeEditor> {
   Future<void> _deleteThisJobCode() async {
     final usage = await _dao.getUsageCounts(_settings.code);
     final employeeCount = usage['employees'] ?? 0;
-    final templateCount = usage['templates'] ?? 0;
 
     final codes = _allCodes.isNotEmpty ? _allCodes : await _dao.getAll();
     if (_allCodes.isEmpty && mounted) {
@@ -76,7 +75,6 @@ class _JobCodeEditorState extends State<JobCodeEditor> {
                     const Text('This cannot be undone.'),
                     const SizedBox(height: 8),
                     Text('Employees using it: $employeeCount'),
-                    Text('Shift templates tied to it: $templateCount (will be deleted)'),
                     if (employeeCount > 0) ...[
                       const SizedBox(height: 12),
                       const Text('You must reassign those employees first:'),

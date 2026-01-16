@@ -88,10 +88,8 @@ Future<void> _onCreate(Database db, int version) async {
   await db.execute('''
     CREATE TABLE shift_templates (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      jobCode TEXT NOT NULL,
       templateName TEXT NOT NULL,
-      startTime TEXT NOT NULL,
-      FOREIGN KEY(jobCode) REFERENCES job_code_settings(code)
+      startTime TEXT NOT NULL
     )
   ''');
 
@@ -161,7 +159,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 9,
+      version: 10,
       onCreate: _onCreate,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -191,10 +189,8 @@ class AppDatabase {
           await db.execute('''
             CREATE TABLE shift_templates (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
-              jobCode TEXT NOT NULL,
               templateName TEXT NOT NULL,
-              startTime TEXT NOT NULL,
-              FOREIGN KEY(jobCode) REFERENCES job_code_settings(code)
+              startTime TEXT NOT NULL
             )
           ''');
         }
@@ -249,6 +245,32 @@ class AppDatabase {
         if (oldVersion < 9) {
           // Add maxHoursPerWeek column to job_code_settings
           await db.execute('ALTER TABLE job_code_settings ADD COLUMN maxHoursPerWeek INTEGER NOT NULL DEFAULT 40');
+        }
+
+        if (oldVersion < 10) {
+          // shift_templates: remove jobCode column (templates are now global/shared)
+          await db.execute('PRAGMA foreign_keys=OFF');
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS shift_templates_new (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              templateName TEXT NOT NULL,
+              startTime TEXT NOT NULL
+            )
+          ''');
+
+          // Copy what we can from the old table if it exists
+          try {
+            await db.execute('''
+              INSERT INTO shift_templates_new (templateName, startTime)
+              SELECT DISTINCT templateName, startTime FROM shift_templates
+            ''');
+            await db.execute('DROP TABLE shift_templates');
+          } catch (_) {
+            // If the old schema doesn't match (or table doesn't exist), continue.
+          }
+
+          await db.execute('ALTER TABLE shift_templates_new RENAME TO shift_templates');
+          await db.execute('PRAGMA foreign_keys=ON');
         }
       },
     );

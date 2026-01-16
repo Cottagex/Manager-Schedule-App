@@ -641,15 +641,10 @@ class _ScheduleViewState extends State<ScheduleView> {
     final newShifts = <Shift>[];
     
     for (final employee in _employees) {
-      // Find templates matching this employee's job code
-      final matchingTemplates = templates.where(
-        (t) => t.jobCode.toLowerCase() == employee.jobCode.toLowerCase()
-      ).toList();
-      
-      if (matchingTemplates.isEmpty) continue;
-      
-      // Use the first matching template
-      final template = matchingTemplates.first;
+      if (templates.isEmpty) continue;
+
+      // Templates are shared across job codes; use the first template.
+      final template = templates.first;
       
       // Parse template start time (e.g., "9:00 AM")
       final startTimeParts = template.startTime.replaceAll(RegExp(r'[APMapm]'), '').trim().split(':');
@@ -1127,6 +1122,7 @@ class _ScheduleViewState extends State<ScheduleView> {
       employees: _filteredEmployees,
       shifts: _shifts,
       notes: _notes,
+      jobCodeSettings: _jobCodeSettings,
       clipboardAvailable: _clipboard != null,
       onCopyShift: (s) {
         setState(() {
@@ -1772,48 +1768,38 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
                                 
                                 return SizedBox(
                                   height: 60,
-                                  child: Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: Padding(
-                                      padding: const EdgeInsets.only(left: 8),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                                    child: Center(
+                                      child: Column(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        crossAxisAlignment: CrossAxisAlignment.center,
                                         children: [
-                                          CircleAvatar(
-                                            radius: 16,
-                                            child: Text(
-                                              e.name.isNotEmpty ? e.name[0] : '?',
-                                              style: const TextStyle(fontSize: 14),
-                                            ),
+                                          Text(
+                                            e.name,
+                                            overflow: TextOverflow.ellipsis,
+                                            textAlign: TextAlign.center,
+                                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                                           ),
-                                          const SizedBox(width: 8),
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              mainAxisAlignment: MainAxisAlignment.center,
-                                              children: [
-                                                Text(e.name, overflow: TextOverflow.ellipsis),
-                                                Row(
-                                                  children: [
-                                                    Text(
-                                                      '${weeklyHours}h',
-                                                      style: TextStyle(
-                                                        fontSize: 11,
-                                                        color: isOverLimit ? Colors.red : Colors.grey,
-                                                        fontWeight: isOverLimit ? FontWeight.bold : FontWeight.normal,
-                                                      ),
-                                                    ),
-                                                    if (isOverLimit) ...[
-                                                      const SizedBox(width: 4),
-                                                      Tooltip(
-                                                        message: 'Over max ${maxHours}h/week limit',
-                                                        child: const Icon(Icons.warning, size: 14, color: Colors.red),
-                                                      ),
-                                                    ],
-                                                  ],
+                                          Row(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: [
+                                              Text(
+                                                '${weeklyHours}h',
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: isOverLimit ? Colors.red : Colors.grey,
+                                                  fontWeight: isOverLimit ? FontWeight.bold : FontWeight.normal,
+                                                ),
+                                              ),
+                                              if (isOverLimit) ...[
+                                                const SizedBox(width: 4),
+                                                Tooltip(
+                                                  message: 'Over max ${maxHours}h/week limit',
+                                                  child: const Icon(Icons.warning, size: 14, color: Colors.red),
                                                 ),
                                               ],
-                                            ),
+                                            ],
                                           ),
                                         ],
                                       ),
@@ -2285,9 +2271,9 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     final employee = widget.employees.firstWhere((e) => e.id == employeeId);
     final jobCode = employee.jobCode;
 
-    // Load templates for this job code
-    await _shiftTemplateDao.insertDefaultTemplatesIfMissing(jobCode);
-    final templates = await _shiftTemplateDao.getTemplatesForJobCode(jobCode);
+    // Load shared templates (not job-code specific)
+    await _shiftTemplateDao.insertDefaultTemplatesIfMissing();
+    final templates = await _shiftTemplateDao.getAllTemplates();
 
     // Load job code settings for duration
     final jobCodeSettings = await _jobCodeDao.getByCode(jobCode);
@@ -2404,6 +2390,7 @@ class MonthlyScheduleView extends StatefulWidget {
   final List<Employee> employees;
   final List<ShiftPlaceholder> shifts;
   final Map<DateTime, ScheduleNote> notes;
+  final List<JobCodeSettings> jobCodeSettings;
   final void Function(ShiftPlaceholder oldShift, DateTime newStart, DateTime newEnd)? onUpdateShift;
   final void Function(ShiftPlaceholder shift)? onCopyShift;
   final void Function(DateTime day, int employeeId)? onPasteTarget;
@@ -2418,6 +2405,7 @@ class MonthlyScheduleView extends StatefulWidget {
     required this.employees,
     this.shifts = const [],
     this.notes = const {},
+    this.jobCodeSettings = const [],
     this.onUpdateShift,
     this.onCopyShift,
     this.onPasteTarget,
@@ -2436,6 +2424,7 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
   // Drag & drop state
   DateTime? _dragHoverDay;
   int? _dragHoverEmployeeId;
+  late final ScrollController _horizontalScrollController;
   final ShiftTemplateDao _shiftTemplateDao = ShiftTemplateDao();
   final JobCodeSettingsDao _jobCodeDao = JobCodeSettingsDao();
   final TimeOffDao _timeOffDao = TimeOffDao();
@@ -2445,7 +2434,14 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
   @override
   void initState() {
     super.initState();
+    _horizontalScrollController = ScrollController();
     print('MonthlyScheduleView initState: ${widget.shifts.length} shifts loaded');
+  }
+
+  @override
+  void dispose() {
+    _horizontalScrollController.dispose();
+    super.dispose();
   }
 
   @override
@@ -2651,9 +2647,9 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     final jobCode = employee.jobCode;
     final day = DateTime(shift.start.year, shift.start.month, shift.start.day);
 
-    // Load templates
-    await _shiftTemplateDao.insertDefaultTemplatesIfMissing(jobCode);
-    final templates = await _shiftTemplateDao.getTemplatesForJobCode(jobCode);
+    // Load shared templates (not job-code specific)
+    await _shiftTemplateDao.insertDefaultTemplatesIfMissing();
+    final templates = await _shiftTemplateDao.getAllTemplates();
 
     // Load job code settings for duration
     final jobCodeSettings = await _jobCodeDao.getByCode(jobCode);
@@ -2912,312 +2908,404 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     );
   }
 
+  Widget _buildMonthlyEmployeeCell({
+    required BuildContext context,
+    required DateTime day,
+    required bool isCurrentMonth,
+    required bool isWeekend,
+    required Employee employee,
+    required double cellWidth,
+  }) {
+    final shiftsForCell = widget.shifts.where((s) {
+      final match = s.employeeId == employee.id &&
+          s.start.year == day.year &&
+          s.start.month == day.month &&
+          s.start.day == day.day;
+      return match;
+    }).toList();
+
+    final isDragHover = _dragHoverDay?.year == day.year &&
+        _dragHoverDay?.month == day.month &&
+        _dragHoverDay?.day == day.day &&
+        _dragHoverEmployeeId == employee.id;
+
+    return DragTarget<ShiftPlaceholder>(
+      onWillAcceptWithDetails: (details) {
+        setState(() {
+          _dragHoverDay = day;
+          _dragHoverEmployeeId = employee.id;
+        });
+        return true;
+      },
+      onLeave: (_) {
+        setState(() {
+          _dragHoverDay = null;
+          _dragHoverEmployeeId = null;
+        });
+      },
+      onAcceptWithDetails: (details) {
+        setState(() {
+          _dragHoverDay = null;
+          _dragHoverEmployeeId = null;
+        });
+        widget.onMoveShift?.call(details.data, day, employee.id!);
+      },
+      builder: (context, candidateData, rejectedData) {
+        return GestureDetector(
+          onTap: shiftsForCell.isEmpty
+              ? () {
+                  // If clipboard has data, paste on single click
+                  if (widget.clipboardAvailable && widget.onPasteTarget != null) {
+                    widget.onPasteTarget!(day, employee.id!);
+                  } else {
+                    // Otherwise show add shift dialog
+                    _showEditDialog(
+                      context,
+                      ShiftPlaceholder(
+                        employeeId: employee.id!,
+                        start: DateTime(day.year, day.month, day.day, 9, 0),
+                        end: DateTime(day.year, day.month, day.day, 17, 0),
+                        text: '',
+                      ),
+                    );
+                  }
+                }
+              : null,
+          onSecondaryTapDown: shiftsForCell.isEmpty
+              ? (details) {
+                  _showEmptyCellContextMenu(
+                    context,
+                    day,
+                    employee.id!,
+                    details.globalPosition,
+                  );
+                }
+              : null,
+          child: Container(
+            width: cellWidth,
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              border: Border(left: BorderSide(color: Theme.of(context).dividerColor)),
+              color: isDragHover
+                  ? Colors.blue.withAlpha(50)
+                  : !isCurrentMonth
+                      ? Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(25)
+                      : isWeekend
+                          ? Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(51)
+                          : null,
+            ),
+            child: shiftsForCell.isEmpty
+                ? (isDragHover
+                    ? const Center(child: Icon(Icons.add, color: Colors.blue, size: 20))
+                    : const SizedBox.shrink())
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: shiftsForCell.map((shift) {
+                      final isSelected = _selectedShift == shift;
+                      final startLabel = _formatTimeOfDay(
+                        TimeOfDay(hour: shift.start.hour, minute: shift.start.minute),
+                      );
+                      final endLabel = _formatTimeOfDay(
+                        TimeOfDay(hour: shift.end.hour, minute: shift.end.minute),
+                      );
+
+                      return Draggable<ShiftPlaceholder>(
+                        data: shift,
+                        feedback: Material(
+                          elevation: 4,
+                          borderRadius: BorderRadius.circular(4),
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.withAlpha(200),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              _isLabelOnly(shift.text) ? _labelText(shift.text) : '$startLabel-$endLabel',
+                              style: const TextStyle(color: Colors.white, fontSize: 10),
+                            ),
+                          ),
+                        ),
+                        childWhenDragging: Opacity(
+                          opacity: 0.3,
+                          child: _buildShiftChip(shift, isSelected, startLabel, endLabel, context),
+                        ),
+                        child: GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _selectedShift = isSelected ? null : shift;
+                            });
+                          },
+                          onDoubleTap: () {
+                            _showEditDialog(context, shift);
+                          },
+                          onSecondaryTapDown: (details) {
+                            setState(() {
+                              _selectedShift = shift;
+                            });
+                            _showShiftContextMenu(context, shift, details.globalPosition);
+                          },
+                          child: _buildShiftChip(shift, isSelected, startLabel, endLabel, context),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final weeks = _buildCalendarWeeks();
     const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+    Color colorFromHex(String hex) {
+      final clean = hex.replaceAll('#', '');
+      if (clean.length == 6) {
+        return Color(int.parse('FF$clean', radix: 16));
+      }
+      if (clean.length == 8) {
+        return Color(int.parse(clean, radix: 16));
+      }
+      return Theme.of(context).colorScheme.primary;
+    }
+
+    Color jobCodeColorFor(String jobCode) {
+      final settings = widget.jobCodeSettings.cast<JobCodeSettings?>().firstWhere(
+            (s) => s != null && s.code.toLowerCase() == jobCode.toLowerCase(),
+            orElse: () => null,
+          );
+      final hex = settings?.colorHex;
+      if (hex == null || hex.trim().isEmpty) return Theme.of(context).colorScheme.primary;
+      return colorFromHex(hex);
+    }
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final dayColumnWidth = 120.0;
+        const groupGapWidth = 12.0;
+
+        int jobCodeBreaks = 0;
+        for (int i = 1; i < widget.employees.length; i++) {
+          final prev = widget.employees[i - 1].jobCode.toLowerCase();
+          final curr = widget.employees[i].jobCode.toLowerCase();
+          if (prev != curr) jobCodeBreaks++;
+        }
+
         final availableWidth = constraints.maxWidth - dayColumnWidth;
+        final effectiveAvailableWidth = (availableWidth - (jobCodeBreaks * groupGapWidth)).clamp(0.0, double.infinity);
         final cellWidth = widget.employees.isNotEmpty 
-            ? (availableWidth / widget.employees.length).clamp(80.0, 200.0)
+            ? (effectiveAvailableWidth / widget.employees.length).clamp(80.0, 200.0)
             : 100.0;
 
         // Account for borders (2px on each side = 4px total)
-        final totalWidth = dayColumnWidth + (cellWidth * widget.employees.length) + 4;
+        final totalWidth = dayColumnWidth + (cellWidth * widget.employees.length) + (jobCodeBreaks * groupGapWidth) + 4;
 
-        return Column(
-          children: [
-            // Header row with employee names - horizontally scrollable
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Container(
-                width: totalWidth,
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primaryContainer,
-                  border: Border.all(color: Theme.of(context).dividerColor, width: 2),
-                ),
-                child: Row(
-                  children: [
-                    // Empty corner cell
-                    SizedBox(
-                      width: dayColumnWidth,
-                      height: 60,
-                      child: const Center(
-                        child: Text('Day', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                      ),
-                    ),
-                    // Employee headers
-                    ...widget.employees.map((employee) => Container(
-                      width: cellWidth,
-                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-                      decoration: BoxDecoration(
-                        border: Border(left: BorderSide(color: Theme.of(context).dividerColor)),
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          CircleAvatar(
-                            radius: 14,
-                            child: Text(
-                              employee.name.isNotEmpty ? employee.name[0] : '?',
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            employee.name,
-                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                      ),
-                    )),
-                  ],
+        List<Widget> buildEmployeeHeaderCells() {
+          final cells = <Widget>[];
+          for (int i = 0; i < widget.employees.length; i++) {
+            final employee = widget.employees[i];
+
+            if (i > 0) {
+              final prevJob = widget.employees[i - 1].jobCode.toLowerCase();
+              final currJob = employee.jobCode.toLowerCase();
+              if (prevJob != currJob) {
+                cells.add(Container(width: groupGapWidth, height: 60));
+              }
+            }
+
+            final bg = jobCodeColorFor(employee.jobCode);
+            final fg = ThemeData.estimateBrightnessForColor(bg) == Brightness.dark ? Colors.white : Colors.black;
+
+            cells.add(Container(
+              width: cellWidth,
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+              decoration: BoxDecoration(
+                color: bg,
+                border: Border(left: BorderSide(color: Theme.of(context).dividerColor)),
+              ),
+              child: Center(
+                child: Text(
+                  employee.name,
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: fg),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
                 ),
               ),
-            ),
-            const SizedBox(height: 8),
-            // Weeks with days and employee cells
-            Expanded(
-              child: ListView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                itemCount: weeks.length,
-                itemBuilder: (context, weekIndex) {
-                  final week = weeks[weekIndex];
-                  
-                  return SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Container(
-                      width: totalWidth,
-                      margin: const EdgeInsets.only(bottom: 12),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Theme.of(context).dividerColor, width: 2),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Column(
-                        children: week.asMap().entries.map((entry) {
-                          final dayIndex = entry.key;
-                          final day = entry.value;
-                          
-                          if (day == null) {
-                            return const SizedBox.shrink();
-                          }
+            ));
+          }
+          return cells;
+        }
 
-                          final isCurrentMonth = day.month == widget.date.month;
-                          final isWeekend = day.weekday == DateTime.saturday || day.weekday == DateTime.sunday;
-                          final dayName = dayNames[day.weekday % 7];
-                          
-                          return Container(
-                            decoration: BoxDecoration(
-                              border: dayIndex < 6 
-                                  ? Border(bottom: BorderSide(color: Theme.of(context).dividerColor))
-                                  : null,
-                            ),
-                            child: IntrinsicHeight(
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  // Day label column with notes
-                                  GestureDetector(
-                                    onTap: () => _showNoteDialog(context, day),
-                                    child: Container(
-                                    width: dayColumnWidth,
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      border: Border(right: BorderSide(color: Theme.of(context).dividerColor, width: 2)),
-                                      color: isWeekend
-                                          ? Theme.of(context).colorScheme.primaryContainer.withAlpha(51)
-                                          : !isCurrentMonth
-                                              ? Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(25)
-                                            : null,
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    mainAxisAlignment: MainAxisAlignment.center,
+        return Scrollbar(
+          controller: _horizontalScrollController,
+          thumbVisibility: true,
+          child: SingleChildScrollView(
+            controller: _horizontalScrollController,
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: totalWidth,
+              child: Column(
+                children: [
+                  Container(
+                    width: totalWidth,
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primaryContainer,
+                      border: Border.all(color: Theme.of(context).dividerColor, width: 2),
+                    ),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: dayColumnWidth,
+                          height: 60,
+                          child: const Center(
+                            child: Text('Day', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                          ),
+                        ),
+                        ...buildEmployeeHeaderCells(),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView.builder(
+                      padding: EdgeInsets.zero,
+                      itemCount: weeks.length,
+                      itemBuilder: (context, weekIndex) {
+                        final week = weeks[weekIndex];
+
+                        return Container(
+                          width: totalWidth,
+                          margin: const EdgeInsets.only(bottom: 12),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Theme.of(context).dividerColor, width: 2),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Column(
+                            children: week.asMap().entries.map((entry) {
+                              final dayIndex = entry.key;
+                              final day = entry.value;
+
+                              if (day == null) {
+                                return const SizedBox.shrink();
+                              }
+
+                              final isCurrentMonth = day.month == widget.date.month;
+                              final isWeekend = day.weekday == DateTime.saturday || day.weekday == DateTime.sunday;
+                              final dayName = dayNames[day.weekday % 7];
+
+                              return Container(
+                                decoration: BoxDecoration(
+                                  border: dayIndex < 6
+                                      ? Border(bottom: BorderSide(color: Theme.of(context).dividerColor))
+                                      : null,
+                                ),
+                                child: IntrinsicHeight(
+                                  child: Row(
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
                                     children: [
-                                      Row(
-                                        children: [
-                                          Text(
-                                            dayName,
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 14,
-                                            ),
+                                      // Day label column with notes
+                                      GestureDetector(
+                                        onTap: () => _showNoteDialog(context, day),
+                                        child: Container(
+                                          width: dayColumnWidth,
+                                          padding: const EdgeInsets.all(8),
+                                          decoration: BoxDecoration(
+                                            border: Border(right: BorderSide(color: Theme.of(context).dividerColor, width: 2)),
+                                            color: isWeekend
+                                                ? Theme.of(context).colorScheme.primaryContainer.withAlpha(51)
+                                                : !isCurrentMonth
+                                                    ? Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(25)
+                                                    : null,
                                           ),
-                                          const Spacer(),
-                                          if (_hasNoteForDay(day))
-                                            const Icon(Icons.note, size: 14, color: Colors.amber),
-                                        ],
-                                      ),
-                                      Text(
-                                        '${day.month}/${day.day}',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: !isCurrentMonth
-                                              ? Colors.grey
-                                              : day.day == DateTime.now().day && 
-                                                day.month == DateTime.now().month && 
-                                                day.year == DateTime.now().year
-                                                  ? Theme.of(context).colorScheme.primary
-                                                  : null,
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  Text(
+                                                    dayName,
+                                                    style: const TextStyle(
+                                                      fontWeight: FontWeight.bold,
+                                                      fontSize: 14,
+                                                    ),
+                                                  ),
+                                                  const Spacer(),
+                                                  if (_hasNoteForDay(day))
+                                                    const Icon(Icons.note, size: 14, color: Colors.amber),
+                                                ],
+                                              ),
+                                              Text(
+                                                '${day.month}/${day.day}',
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: !isCurrentMonth
+                                                      ? Colors.grey
+                                                      : day.day == DateTime.now().day &&
+                                                              day.month == DateTime.now().month &&
+                                                              day.year == DateTime.now().year
+                                                          ? Theme.of(context).colorScheme.primary
+                                                          : null,
+                                                ),
+                                              ),
+                                              if (_hasNoteForDay(day))
+                                                Text(
+                                                  _getNoteForDay(day),
+                                                  style: const TextStyle(fontSize: 9, color: Colors.amber),
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                ),
+                                            ],
+                                          ),
                                         ),
                                       ),
-                                      if (_hasNoteForDay(day))
-                                        Text(
-                                          _getNoteForDay(day),
-                                          style: const TextStyle(fontSize: 9, color: Colors.amber),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
+
+                                      // Employee cells for this day
+                                      ...widget.employees.asMap().entries.expand((entry) {
+                                        final i = entry.key;
+                                        final employee = entry.value;
+                                        final widgets = <Widget>[];
+
+                                        if (i > 0) {
+                                          final prevJob = widget.employees[i - 1].jobCode.toLowerCase();
+                                          final currJob = employee.jobCode.toLowerCase();
+                                          if (prevJob != currJob) {
+                                            widgets.add(SizedBox(width: groupGapWidth));
+                                          }
+                                        }
+
+                                        widgets.add(
+                                          _buildMonthlyEmployeeCell(
+                                            context: context,
+                                            day: day,
+                                            isCurrentMonth: isCurrentMonth,
+                                            isWeekend: isWeekend,
+                                            employee: employee,
+                                            cellWidth: cellWidth,
+                                          ),
+                                        );
+
+                                        return widgets;
+                                      }).toList(),
                                     ],
                                   ),
                                 ),
-                                  ),
-                                // Employee cells for this day
-                                ...widget.employees.map((employee) {
-                                  final shiftsForCell = widget.shifts.where((s) {
-                                    final match = s.employeeId == employee.id &&
-                                      s.start.year == day.year &&
-                                      s.start.month == day.month &&
-                                      s.start.day == day.day;
-                                    return match;
-                                  }).toList();
-
-                                  final isDragHover = _dragHoverDay?.year == day.year &&
-                                      _dragHoverDay?.month == day.month &&
-                                      _dragHoverDay?.day == day.day &&
-                                      _dragHoverEmployeeId == employee.id;
-
-                                  // Wrap in DragTarget for drop support
-                                  return DragTarget<ShiftPlaceholder>(
-                                    onWillAcceptWithDetails: (details) {
-                                      setState(() {
-                                        _dragHoverDay = day;
-                                        _dragHoverEmployeeId = employee.id;
-                                      });
-                                      return true;
-                                    },
-                                    onLeave: (_) {
-                                      setState(() {
-                                        _dragHoverDay = null;
-                                        _dragHoverEmployeeId = null;
-                                      });
-                                    },
-                                    onAcceptWithDetails: (details) {
-                                      setState(() {
-                                        _dragHoverDay = null;
-                                        _dragHoverEmployeeId = null;
-                                      });
-                                      widget.onMoveShift?.call(details.data, day, employee.id!);
-                                    },
-                                    builder: (context, candidateData, rejectedData) {
-                                      return GestureDetector(
-                                        onTap: shiftsForCell.isEmpty ? () {
-                                          // If clipboard has data, paste on single click
-                                          if (widget.clipboardAvailable && widget.onPasteTarget != null) {
-                                            widget.onPasteTarget!(day, employee.id!);
-                                          } else {
-                                            // Otherwise show add shift dialog
-                                            _showEditDialog(context, ShiftPlaceholder(
-                                              employeeId: employee.id!,
-                                              start: DateTime(day.year, day.month, day.day, 9, 0),
-                                              end: DateTime(day.year, day.month, day.day, 17, 0),
-                                              text: '',
-                                            ));
-                                          }
-                                        } : null,
-                                        onSecondaryTapDown: shiftsForCell.isEmpty ? (details) {
-                                          _showEmptyCellContextMenu(context, day, employee.id!, details.globalPosition);
-                                        } : null,
-                                        child: Container(
-                                          width: cellWidth,
-                                          padding: const EdgeInsets.all(6),
-                                          decoration: BoxDecoration(
-                                            border: Border(left: BorderSide(color: Theme.of(context).dividerColor)),
-                                            color: isDragHover
-                                                ? Colors.blue.withAlpha(50)
-                                                : !isCurrentMonth
-                                                    ? Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(25)
-                                                    : isWeekend
-                                                        ? Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(51)
-                                                        : null,
-                                          ),
-                                          child: shiftsForCell.isEmpty
-                                              ? (isDragHover 
-                                                  ? const Center(child: Icon(Icons.add, color: Colors.blue, size: 20))
-                                                  : const SizedBox.shrink())
-                                              : Column(
-                                                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                                                  mainAxisAlignment: MainAxisAlignment.center,
-                                                  children: shiftsForCell.map((shift) {
-                                                    final isSelected = _selectedShift == shift;
-                                                    final startLabel = _formatTimeOfDay(TimeOfDay(hour: shift.start.hour, minute: shift.start.minute));
-                                                    final endLabel = _formatTimeOfDay(TimeOfDay(hour: shift.end.hour, minute: shift.end.minute));
-
-                                                    // Wrap shift in Draggable
-                                                    return Draggable<ShiftPlaceholder>(
-                                                      data: shift,
-                                                      feedback: Material(
-                                                        elevation: 4,
-                                                        borderRadius: BorderRadius.circular(4),
-                                                        child: Container(
-                                                          padding: const EdgeInsets.all(8),
-                                                          decoration: BoxDecoration(
-                                                            color: Colors.blue.withAlpha(200),
-                                                            borderRadius: BorderRadius.circular(4),
-                                                          ),
-                                                          child: Text(
-                                                            _isLabelOnly(shift.text) ? _labelText(shift.text) : '$startLabel-$endLabel',
-                                                            style: const TextStyle(color: Colors.white, fontSize: 10),
-                                                          ),
-                                                        ),
-                                                      ),
-                                                      childWhenDragging: Opacity(
-                                                        opacity: 0.3,
-                                                        child: _buildShiftChip(shift, isSelected, startLabel, endLabel, context),
-                                                      ),
-                                                      child: GestureDetector(
-                                                        onTap: () {
-                                                          setState(() {
-                                                            _selectedShift = isSelected ? null : shift;
-                                                          });
-                                                        },
-                                                        onDoubleTap: () {
-                                                          _showEditDialog(context, shift);
-                                                        },
-                                                        onSecondaryTapDown: (details) {
-                                                          setState(() {
-                                                            _selectedShift = shift;
-                                                          });
-                                                          _showShiftContextMenu(context, shift, details.globalPosition);
-                                                        },
-                                                        child: _buildShiftChip(shift, isSelected, startLabel, endLabel, context),
-                                                      ),
-                                                    );
-                                                  }).toList(),
-                                                ),
-                                        ),
-                                      );
-                                    },
-                                  );
-                                }),
-                              ],
-                            ),
+                              );
+                            }).toList(),
                           ),
                         );
-                      }).toList(),
-                      ),
+                      },
                     ),
-                  );
-                },
+                  ),
+                ],
               ),
             ),
-          ],
+          ),
         );
       },
     );

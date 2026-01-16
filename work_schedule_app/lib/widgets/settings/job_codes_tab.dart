@@ -23,7 +23,6 @@ class _JobCodesTabState extends State<JobCodesTab> {
   Future<void> _deleteJobCode(JobCodeSettings codeToDelete) async {
     final usage = await _dao.getUsageCounts(codeToDelete.code);
     final employeeCount = usage['employees'] ?? 0;
-    final templateCount = usage['templates'] ?? 0;
 
     final otherCodes = _codes.where((c) => c.code.toLowerCase() != codeToDelete.code.toLowerCase()).toList();
     String? selectedReplacement = otherCodes.isNotEmpty ? otherCodes.first.code : null;
@@ -45,7 +44,6 @@ class _JobCodesTabState extends State<JobCodesTab> {
                     Text('This will remove the job code from Settings.'),
                     const SizedBox(height: 8),
                     Text('Employees using it: $employeeCount'),
-                    Text('Shift templates tied to it: $templateCount (will be deleted)'),
                     if (employeeCount > 0) ...[
                       const SizedBox(height: 12),
                       const Text('You must reassign those employees first:'),
