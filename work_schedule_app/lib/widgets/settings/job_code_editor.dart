@@ -16,7 +16,7 @@ class _JobCodeEditorState extends State<JobCodeEditor> {
   final JobCodeSettingsDao _dao = JobCodeSettingsDao();
 
   late TextEditingController _hoursController;
-  late TextEditingController _vacDaysController;
+  late TextEditingController _maxHoursController;
   late TextEditingController _codeController;
   bool _editingCode = false;
 
@@ -26,10 +26,10 @@ class _JobCodeEditorState extends State<JobCodeEditor> {
     _settings = widget.settings;
 
     _hoursController = TextEditingController(
-      text: _settings.defaultScheduledHours.toString(),
+      text: _settings.defaultDailyHours.toString(),
     );
-    _vacDaysController = TextEditingController(
-      text: _settings.defaultVacationDays.toString(),
+    _maxHoursController = TextEditingController(
+      text: _settings.maxHoursPerWeek.toString(),
     );
     _codeController = TextEditingController(text: _settings.code);
   }
@@ -37,7 +37,7 @@ class _JobCodeEditorState extends State<JobCodeEditor> {
   @override
   void dispose() {
     _hoursController.dispose();
-    _vacDaysController.dispose();
+    _maxHoursController.dispose();
     _codeController.dispose();
     super.dispose();
   }
@@ -137,8 +137,8 @@ class _JobCodeEditorState extends State<JobCodeEditor> {
                           _settings = JobCodeSettings(
                             code: newCode,
                             hasPTO: _settings.hasPTO,
-                            defaultScheduledHours: _settings.defaultScheduledHours,
-                            defaultVacationDays: _settings.defaultVacationDays,
+                            defaultDailyHours: _settings.defaultDailyHours,
+                            maxHoursPerWeek: _settings.maxHoursPerWeek,
                             colorHex: _settings.colorHex,
                           );
                         }
@@ -162,29 +162,31 @@ class _JobCodeEditorState extends State<JobCodeEditor> {
               },
             ),
 
-            // Default Scheduled Hours
+            // Default Daily Hours
             TextField(
-              decoration: const InputDecoration(labelText: "Default Scheduled Hours"),
+              decoration: const InputDecoration(labelText: "Default Daily Hours"),
               keyboardType: TextInputType.number,
               controller: _hoursController,
               onChanged: (v) {
                 setState(() {
                   _settings = _settings.copyWith(
-                    defaultScheduledHours: int.tryParse(v) ?? 0,
+                    defaultDailyHours: int.tryParse(v) ?? 8,
                   );
                 });
               },
             ),
 
-            // Default Vacation Days
+            const SizedBox(height: 12),
+
+            // Max Hours Per Week
             TextField(
-              decoration: const InputDecoration(labelText: "Default Vacation Days"),
+              decoration: const InputDecoration(labelText: "Max Hours Per Week"),
               keyboardType: TextInputType.number,
-              controller: _vacDaysController,
+              controller: _maxHoursController,
               onChanged: (v) {
                 setState(() {
                   _settings = _settings.copyWith(
-                    defaultVacationDays: int.tryParse(v) ?? 0,
+                    maxHoursPerWeek: int.tryParse(v) ?? 40,
                   );
                 });
               },
@@ -224,9 +226,10 @@ class _JobCodeEditorState extends State<JobCodeEditor> {
                 final finalSettings = JobCodeSettings(
                   code: newCode,
                   hasPTO: _settings.hasPTO,
-                  defaultScheduledHours: _settings.defaultScheduledHours,
-                  defaultVacationDays: _settings.defaultVacationDays,
+                  defaultDailyHours: _settings.defaultDailyHours,
+                  maxHoursPerWeek: _settings.maxHoursPerWeek,
                   colorHex: _settings.colorHex,
+                  sortOrder: _settings.sortOrder,
                 );
 
                 final messenger = ScaffoldMessenger.of(context);

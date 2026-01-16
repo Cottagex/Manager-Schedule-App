@@ -268,12 +268,12 @@ class _ShiftTemplatesTabState extends State<ShiftTemplatesTab> {
                         orElse: () => JobCodeSettings(
                           code: template.jobCode,
                           hasPTO: true,
-                          defaultScheduledHours: 8,
-                          defaultVacationDays: 0,
+                          defaultDailyHours: 8,
+                          maxHoursPerWeek: 40,
                           colorHex: '#000000',
                         ),
                       );
-                      final duration = jobCode.defaultScheduledHours;
+                      final duration = jobCode.defaultDailyHours;
                       final startParts = template.startTime.split(':');
                       final startHour = int.parse(startParts[0]);
                       final startMin = int.parse(startParts[1]);

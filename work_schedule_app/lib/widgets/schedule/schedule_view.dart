@@ -536,7 +536,7 @@ class _ScheduleViewState extends State<ScheduleView> {
     final jobCodeSettings = await _jobCodeSettingsDao.getAll();
     final defaultHoursMap = <String, int>{};
     for (final setting in jobCodeSettings) {
-      defaultHoursMap[setting.code.toLowerCase()] = setting.defaultScheduledHours;
+      defaultHoursMap[setting.code.toLowerCase()] = setting.defaultDailyHours;
     }
 
     // Show dialog to select days and options
@@ -968,6 +968,7 @@ class _ScheduleViewState extends State<ScheduleView> {
       employees: _filteredEmployees,
       shifts: _shifts,
       notes: _notes,
+      jobCodeSettings: _jobCodeSettings,
       clipboardAvailable: _clipboard != null,
       onCopyShift: (s) {
         setState(() {
@@ -1417,6 +1418,7 @@ class WeeklyScheduleView extends StatefulWidget {
   final List<Employee> employees;
   final List<ShiftPlaceholder> shifts;
   final Map<DateTime, ScheduleNote> notes;
+  final List<JobCodeSettings> jobCodeSettings;
   final void Function(ShiftPlaceholder oldShift, DateTime newStart, DateTime newEnd)? onUpdateShift;
   final void Function(ShiftPlaceholder shift)? onCopyShift;
   final void Function(DateTime day, int employeeId)? onPasteTarget;
@@ -1431,6 +1433,7 @@ class WeeklyScheduleView extends StatefulWidget {
     required this.employees,
     this.shifts = const [],
     this.notes = const {},
+    this.jobCodeSettings = const [],
     this.onUpdateShift,
     this.onCopyShift,
     this.onPasteTarget,
@@ -1468,6 +1471,39 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
   void dispose() {
     _scrollController.dispose();
     super.dispose();
+  }
+
+  // Calculate total hours for an employee in the given week
+  int _calculateWeeklyHours(int employeeId, List<DateTime> weekDays) {
+    int totalMinutes = 0;
+    for (final day in weekDays) {
+      final shiftsForDay = widget.shifts.where((s) =>
+        s.employeeId == employeeId &&
+        s.start.year == day.year &&
+        s.start.month == day.month &&
+        s.start.day == day.day &&
+        !['VAC', 'PTO', 'REQ OFF'].contains(s.text.toUpperCase())
+      );
+      for (final shift in shiftsForDay) {
+        totalMinutes += shift.end.difference(shift.start).inMinutes;
+      }
+    }
+    return (totalMinutes / 60).round();
+  }
+
+  // Get max hours per week for an employee based on their job code
+  int _getMaxHoursForEmployee(Employee employee) {
+    final settings = widget.jobCodeSettings.firstWhere(
+      (s) => s.code.toLowerCase() == employee.jobCode.toLowerCase(),
+      orElse: () => JobCodeSettings(
+        code: employee.jobCode,
+        hasPTO: false,
+        defaultDailyHours: 8,
+        maxHoursPerWeek: 40,
+        colorHex: '#4285F4',
+      ),
+    );
+    return settings.maxHoursPerWeek;
   }
 
   Widget _buildTemplateDialog({
@@ -1727,6 +1763,11 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
                             width: employeeColumnWidth,
                             child: Column(
                               children: widget.employees.map((e) {
+                                // Calculate weekly hours for this employee
+                                final weeklyHours = _calculateWeeklyHours(e.id!, days);
+                                final maxHours = _getMaxHoursForEmployee(e);
+                                final isOverLimit = weeklyHours > maxHours;
+                                
                                 return SizedBox(
                                   height: 60,
                                   child: Align(
@@ -1744,7 +1785,34 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
                                             ),
                                           ),
                                           const SizedBox(width: 8),
-                                          Text(e.name),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              mainAxisAlignment: MainAxisAlignment.center,
+                                              children: [
+                                                Text(e.name, overflow: TextOverflow.ellipsis),
+                                                Row(
+                                                  children: [
+                                                    Text(
+                                                      '${weeklyHours}h',
+                                                      style: TextStyle(
+                                                        fontSize: 11,
+                                                        color: isOverLimit ? Colors.red : Colors.grey,
+                                                        fontWeight: isOverLimit ? FontWeight.bold : FontWeight.normal,
+                                                      ),
+                                                    ),
+                                                    if (isOverLimit) ...[
+                                                      const SizedBox(width: 4),
+                                                      Tooltip(
+                                                        message: 'Over max ${maxHours}h/week limit',
+                                                        child: const Icon(Icons.warning, size: 14, color: Colors.red),
+                                                      ),
+                                                    ],
+                                                  ],
+                                                ),
+                                              ],
+                                            ),
+                                          ),
                                         ],
                                       ),
                                     ),
@@ -2221,7 +2289,7 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
 
     // Load job code settings for duration
     final jobCodeSettings = await _jobCodeDao.getByCode(jobCode);
-    final defaultHours = jobCodeSettings?.defaultScheduledHours ?? 8;
+    final defaultHours = jobCodeSettings?.defaultDailyHours ?? 8;
 
     // Check availability
     final availability = await _checkAvailability(employeeId, day);
@@ -2587,7 +2655,7 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
 
     // Load job code settings for duration
     final jobCodeSettings = await _jobCodeDao.getByCode(jobCode);
-    final defaultHours = jobCodeSettings?.defaultScheduledHours ?? 8;
+    final defaultHours = jobCodeSettings?.defaultDailyHours ?? 8;
 
     // Check availability
     final availability = await _checkAvailability(shift.employeeId, day);

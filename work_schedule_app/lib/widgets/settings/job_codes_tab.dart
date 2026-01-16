@@ -51,8 +51,8 @@ class _JobCodesTabState extends State<JobCodesTab> {
                 final newCode = JobCodeSettings(
                   code: code.trim(),
                   hasPTO: false,
-                  defaultScheduledHours: 0,
-                  defaultVacationDays: 0,
+                  defaultDailyHours: 8,
+                  maxHoursPerWeek: 40,
                   colorHex: '#4285F4',
                   sortOrder: nextOrder,
                 );
@@ -153,8 +153,8 @@ class _JobCodesTabState extends State<JobCodesTab> {
                 title: Text(jc.code),
                 subtitle: Text(
                   "PTO: ${jc.hasPTO ? 'Yes' : 'No'} • "
-                  "Hours: ${jc.defaultScheduledHours} • "
-                  "Vacation Days: ${jc.defaultVacationDays}",
+                  "Daily: ${jc.defaultDailyHours}h • "
+                  "Max/Week: ${jc.maxHoursPerWeek}h",
                 ),
                 trailing: Text(
                   '#${index + 1}',
