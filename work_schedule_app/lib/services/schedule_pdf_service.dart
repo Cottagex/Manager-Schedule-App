@@ -294,7 +294,21 @@ class SchedulePdfService {
       return s.text.toUpperCase();
     }
 
-    final range = '${_formatHourMinCompact(s.start)}-${_formatHourMinCompact(s.end)}';
+    // Special formatting for opener (4:30 AM start) and closer (1 AM end)
+    final isOpener = s.start.hour == 4 && s.start.minute == 30;
+    final isCloser = s.end.hour == 1 && s.end.minute == 0;
+    
+    String range;
+    if (isOpener && isCloser) {
+      range = 'Op-CL';
+    } else if (isOpener) {
+      range = 'Op-${_formatHourMinCompact(s.end)}';
+    } else if (isCloser) {
+      range = '${_formatHourMinCompact(s.start)}-CL';
+    } else {
+      range = '${_formatHourMinCompact(s.start)}-${_formatHourMinCompact(s.end)}';
+    }
+    
     final label = s.text.trim();
     if (label.isEmpty) return range;
 
