@@ -2012,6 +2012,15 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
                                     null; // Deselect if already selected
                               } else {
                                 selectedRunnerShift = shiftType;
+                                // Update time selection to match shift type defaults
+                                final shiftTypeObj = _shiftTypes.cast<ShiftType?>().firstWhere(
+                                  (st) => st?.key == shiftType,
+                                  orElse: () => null,
+                                );
+                                if (shiftTypeObj != null) {
+                                  selStart = _findTimeIndex(times, shiftTypeObj.defaultShiftStart);
+                                  selEnd = _findTimeIndex(times, shiftTypeObj.defaultShiftEnd);
+                                }
                               }
                             });
                           },
@@ -2747,6 +2756,20 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     return list;
   }
 
+  /// Find the index in _allowedTimes() for a time string like "08:00"
+  int _findTimeIndex(List<TimeOfDay> times, String timeStr) {
+    final parts = timeStr.split(':');
+    final hour = int.parse(parts[0]);
+    final minute = int.parse(parts[1]);
+    for (int i = 0; i < times.length; i++) {
+      if (times[i].hour == hour && times[i].minute == minute) {
+        return i;
+      }
+    }
+    // Return a reasonable default if not found
+    return 0;
+  }
+
   void _showShiftContextMenu(
     BuildContext context,
     ShiftPlaceholder shift, {
@@ -3128,6 +3151,15 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
                                     selectedRunnerShift = null;
                                   } else {
                                     selectedRunnerShift = shiftType;
+                                    // Update time selection to match shift type defaults
+                                    final shiftTypeObj = _shiftTypes.cast<ShiftType?>().firstWhere(
+                                      (st) => st?.key == shiftType,
+                                      orElse: () => null,
+                                    );
+                                    if (shiftTypeObj != null) {
+                                      selStart = _findTimeIndex(times, shiftTypeObj.defaultShiftStart);
+                                      selEnd = _findTimeIndex(times, shiftTypeObj.defaultShiftEnd);
+                                    }
                                   }
                                 });
                               },
@@ -3832,6 +3864,15 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
                                     selectedRunnerShift = null;
                                   } else {
                                     selectedRunnerShift = shiftType;
+                                    // Update time selection to match shift type defaults
+                                    final shiftTypeObj = _shiftTypes.cast<ShiftType?>().firstWhere(
+                                      (st) => st?.key == shiftType,
+                                      orElse: () => null,
+                                    );
+                                    if (shiftTypeObj != null) {
+                                      selStart = _findTimeIndex(times, shiftTypeObj.defaultShiftStart);
+                                      selEnd = _findTimeIndex(times, shiftTypeObj.defaultShiftEnd);
+                                    }
                                   }
                                 });
                               },
@@ -3928,6 +3969,20 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     list.add(const TimeOfDay(hour: 0, minute: 0));
     list.add(const TimeOfDay(hour: 1, minute: 0));
     return list;
+  }
+
+  /// Find the index in _allowedTimes() for a time string like "08:00"
+  int _findTimeIndex(List<TimeOfDay> times, String timeStr) {
+    final parts = timeStr.split(':');
+    final hour = int.parse(parts[0]);
+    final minute = int.parse(parts[1]);
+    for (int i = 0; i < times.length; i++) {
+      if (times[i].hour == hour && times[i].minute == minute) {
+        return i;
+      }
+    }
+    // Return a reasonable default if not found
+    return 0;
   }
 
   DateTime _timeOfDayToDateTime(DateTime day, TimeOfDay tod) {
