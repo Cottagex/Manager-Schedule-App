@@ -128,6 +128,21 @@ Future<void> _onCreate(Database db, int version) async {
     ON schedule_notes(date)
   ''');
 
+  await db.execute('''
+    CREATE TABLE shift_runners (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL,
+      shiftType TEXT NOT NULL,
+      runnerName TEXT NOT NULL,
+      UNIQUE(date, shiftType)
+    )
+  ''');
+
+  await db.execute('''
+    CREATE INDEX IF NOT EXISTS idx_shift_runners_date 
+    ON shift_runners(date)
+  ''');
+
   log("✅ Schema created", name: 'AppDatabase');
 } 
 
@@ -160,7 +175,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 11,
+      version: 12,
       onCreate: _onCreate,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -277,6 +292,23 @@ class AppDatabase {
         if (oldVersion < 11) {
           // Add endTime column to shift_templates for explicit end times
           await db.execute("ALTER TABLE shift_templates ADD COLUMN endTime TEXT NOT NULL DEFAULT '17:00'");
+        }
+
+        if (oldVersion < 12) {
+          // Add shift_runners table for tracking shift leaders
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS shift_runners (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              date TEXT NOT NULL,
+              shiftType TEXT NOT NULL,
+              runnerName TEXT NOT NULL,
+              UNIQUE(date, shiftType)
+            )
+          ''');
+          await db.execute('''
+            CREATE INDEX IF NOT EXISTS idx_shift_runners_date 
+            ON shift_runners(date)
+          ''');
         }
       },
     );

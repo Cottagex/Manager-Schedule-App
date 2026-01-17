@@ -7,14 +7,17 @@ import '../../database/shift_template_dao.dart';
 import '../../database/job_code_settings_dao.dart';
 import '../../database/shift_dao.dart';
 import '../../database/schedule_note_dao.dart';
+import '../../database/shift_runner_dao.dart';
 import '../../models/employee.dart';
 import '../../models/time_off_entry.dart';
 import '../../models/shift_template.dart';
 import '../../models/shift.dart';
 import '../../models/schedule_note.dart';
 import '../../models/job_code_settings.dart';
+import '../../models/shift_runner.dart';
 import '../../services/schedule_pdf_service.dart';
 import '../../services/schedule_undo_manager.dart';
+import 'shift_runner_table.dart';
 
 // Custom intents for keyboard shortcuts
 class CopyIntent extends Intent {
@@ -954,7 +957,20 @@ class _ScheduleViewState extends State<ScheduleView> {
       return DailyScheduleView(date: _date, employees: _filteredEmployees, shifts: _shifts);
     }
     if (_mode == ScheduleMode.weekly) {
-      return WeeklyScheduleView(
+      // Calculate week start (Sunday)
+      final weekStart = _date.subtract(Duration(days: _date.weekday % 7));
+      final normalizedWeekStart = DateTime(weekStart.year, weekStart.month, weekStart.day);
+      
+      return Column(
+        children: [
+          // Shift Runner table at the top
+          ShiftRunnerTable(
+            weekStart: normalizedWeekStart,
+            onChanged: () => setState(() {}),
+          ),
+          // Weekly schedule below
+          Expanded(
+            child: WeeklyScheduleView(
       date: _date,
       employees: _filteredEmployees,
       shifts: _shifts,
@@ -1108,6 +1124,9 @@ class _ScheduleViewState extends State<ScheduleView> {
         }
         await _refreshShifts();
       },
+            ),
+          ),
+        ],
       );
     }
 
@@ -1451,6 +1470,7 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
   final TimeOffDao _timeOffDao = TimeOffDao();
   final ShiftTemplateDao _shiftTemplateDao = ShiftTemplateDao();
   final JobCodeSettingsDao _jobCodeDao = JobCodeSettingsDao();
+  final ShiftRunnerDao _shiftRunnerDao = ShiftRunnerDao();
   final Map<String, Map<String, dynamic>> _availabilityCache = {};
 
   @override
@@ -1510,13 +1530,24 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     int selStart = 0;
     int selEnd = 16;
     ShiftTemplate? selectedTemplate;
+    final runnerController = TextEditingController();
+    String? detectedShiftType;
+
+    // Helper to detect shift type from selected time
+    String? getShiftTypeFromIndex(int startIdx) {
+      final time = times[startIdx];
+      return ShiftRunner.getShiftTypeForTime(time.hour, time.minute);
+    }
 
     return StatefulBuilder(builder: (context, setDialogState) {
+      detectedShiftType = getShiftTypeFromIndex(selStart);
+      
       return AlertDialog(
         title: const Text('Add Shift'),
         content: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Templates column (left)
             if (templates.isNotEmpty)
               Container(
                 width: 140,
@@ -1575,6 +1606,7 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
                   ],
                 ),
               ),
+            // Time selection column (center)
             Expanded(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -1633,14 +1665,102 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
                 ],
               ),
             ),
+            // Shift Runner column (right)
+            Container(
+              width: 130,
+              padding: const EdgeInsets.only(left: 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text('Shift Runner:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                  const SizedBox(height: 8),
+                  if (detectedShiftType != null) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _getShiftTypeColor(detectedShiftType!).withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: _getShiftTypeColor(detectedShiftType!)),
+                      ),
+                      child: Text(
+                        ShiftRunner.getLabelForType(detectedShiftType!),
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: _getShiftTypeColor(detectedShiftType!),
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: runnerController,
+                      decoration: const InputDecoration(
+                        hintText: 'Runner name',
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                        border: OutlineInputBorder(),
+                      ),
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    const SizedBox(height: 8),
+                    // Quick select from employees
+                    SizedBox(
+                      height: 100,
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: widget.employees.length,
+                        itemBuilder: (context, index) {
+                          final emp = widget.employees[index];
+                          return InkWell(
+                            onTap: () {
+                              setDialogState(() {
+                                runnerController.text = emp.name;
+                              });
+                            },
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 2),
+                              child: Text(
+                                emp.name,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: runnerController.text == emp.name ? Colors.blue : null,
+                                  fontWeight: runnerController.text == emp.name ? FontWeight.bold : null,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ] else
+                    const Text(
+                      'Select a time to assign a shift runner',
+                      style: TextStyle(fontSize: 10, color: Colors.grey),
+                    ),
+                ],
+              ),
+            ),
           ],
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           TextButton(
-            onPressed: () {
+            onPressed: () async {
               final newStart = _timeOfDayToDateTime(day, times[selStart]);
               final newEnd = _timeOfDayToDateTime(day, times[selEnd]);
+              
+              // Save shift runner if assigned
+              final runnerName = runnerController.text.trim();
+              if (runnerName.isNotEmpty && detectedShiftType != null) {
+                await _shiftRunnerDao.upsert(ShiftRunner(
+                  date: day,
+                  shiftType: detectedShiftType!,
+                  runnerName: runnerName,
+                ));
+              }
+              
               if (!newEnd.isAfter(newStart)) {
                 Navigator.pop(context, [newStart, newStart.add(const Duration(hours: 1))]);
               } else {
@@ -1652,6 +1772,21 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
         ],
       );
     });
+  }
+
+  Color _getShiftTypeColor(String shiftType) {
+    switch (shiftType) {
+      case 'open':
+        return Colors.orange;
+      case 'lunch':
+        return Colors.green;
+      case 'dinner':
+        return Colors.blue;
+      case 'close':
+        return Colors.purple;
+      default:
+        return Colors.grey;
+    }
   }
 
   @override
