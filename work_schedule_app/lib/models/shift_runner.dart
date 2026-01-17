@@ -1,18 +1,35 @@
+import 'shift_type.dart';
+
 class ShiftRunner {
   final int? id;
   final DateTime date;
-  final String shiftType; // 'open', 'lunch', 'dinner', 'close'
+  final String shiftType; // key from shift_types table
   final String runnerName;
 
-  // Shift time definitions
-  static const Map<String, Map<String, String>> shiftTimes = {
-    'open': {'start': '04:30', 'end': '11:00', 'label': 'Open'},
-    'lunch': {'start': '11:00', 'end': '15:00', 'label': 'Lunch'},
-    'dinner': {'start': '15:00', 'end': '20:00', 'label': 'Dinner'},
-    'close': {'start': '20:00', 'end': '01:00', 'label': 'Close'},
-  };
+  // Cache for shift types loaded from database
+  static List<ShiftType> _shiftTypes = [];
+  static Map<String, ShiftType> _shiftTypeMap = {};
 
-  static const List<String> shiftOrder = ['open', 'lunch', 'dinner', 'close'];
+  /// Set shift types from database (call this after loading from DB)
+  static void setShiftTypes(List<ShiftType> types) {
+    _shiftTypes = types;
+    _shiftTypeMap = {for (final t in types) t.key: t};
+  }
+
+  /// Get all shift types in order
+  static List<ShiftType> get shiftTypes => _shiftTypes;
+
+  /// Get shift type map
+  static Map<String, ShiftType> get shiftTypeMap => _shiftTypeMap;
+
+  /// Get ordered shift keys
+  static List<String> get shiftOrder => _shiftTypes.map((t) => t.key).toList();
+
+  /// Clear cached shift types
+  static void clearShiftTypes() {
+    _shiftTypes = [];
+    _shiftTypeMap = {};
+  }
 
   ShiftRunner({
     this.id,
@@ -58,23 +75,36 @@ class ShiftRunner {
     );
   }
 
-  /// Get the shift type based on a time
+  /// Get the shift type based on a time using configured ranges
   static String? getShiftTypeForTime(int hour, int minute) {
     final timeValue = hour * 60 + minute;
     
-    // Open: 4:30 AM - 11:00 AM (270 - 660)
-    if (timeValue >= 270 && timeValue < 660) return 'open';
-    // Lunch: 11:00 AM - 3:00 PM (660 - 900)
-    if (timeValue >= 660 && timeValue < 900) return 'lunch';
-    // Dinner: 3:00 PM - 8:00 PM (900 - 1200)
-    if (timeValue >= 900 && timeValue < 1200) return 'dinner';
-    // Close: 8:00 PM - 1:00 AM (1200 - 1440 or 0 - 60)
-    if (timeValue >= 1200 || timeValue < 60) return 'close';
+    for (final shiftType in _shiftTypes) {
+      final startParts = shiftType.rangeStart.split(':');
+      final endParts = shiftType.rangeEnd.split(':');
+      final startValue = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
+      final endValue = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
+      
+      // Handle overnight shifts (end time < start time)
+      if (endValue < startValue) {
+        if (timeValue >= startValue || timeValue < endValue) {
+          return shiftType.key;
+        }
+      } else {
+        if (timeValue >= startValue && timeValue < endValue) {
+          return shiftType.key;
+        }
+      }
+    }
     
     return null;
   }
 
   static String getLabelForType(String type) {
-    return shiftTimes[type]?['label'] ?? type;
+    return _shiftTypeMap[type]?.label ?? type;
+  }
+
+  static String? getColorForType(String type) {
+    return _shiftTypeMap[type]?.colorHex;
   }
 }

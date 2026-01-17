@@ -8,7 +8,7 @@ import '../../database/job_code_settings_dao.dart';
 import '../../database/shift_dao.dart';
 import '../../database/schedule_note_dao.dart';
 import '../../database/shift_runner_dao.dart';
-import '../../database/shift_runner_color_dao.dart';
+import '../../database/shift_type_dao.dart';
 import '../../models/employee.dart';
 import '../../models/time_off_entry.dart';
 import '../../models/shift_template.dart';
@@ -16,7 +16,7 @@ import '../../models/shift.dart';
 import '../../models/schedule_note.dart';
 import '../../models/job_code_settings.dart';
 import '../../models/shift_runner.dart';
-import '../../models/shift_runner_color.dart';
+import '../../models/shift_type.dart';
 import '../../services/schedule_pdf_service.dart';
 import '../../services/schedule_undo_manager.dart';
 import 'shift_runner_table.dart';
@@ -1070,16 +1070,10 @@ class _ScheduleViewState extends State<ScheduleView> {
         weekStart.day,
       );
 
-      return Column(
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Shift Runner table at the top
-          ShiftRunnerTable(
-            weekStart: normalizedWeekStart,
-            onChanged: () => setState(() {
-              _shiftRunnerRefreshKey++;
-            }),
-          ),
-          // Weekly schedule below
+          // Weekly schedule on the left
           Expanded(
             child: WeeklyScheduleView(
               date: _date,
@@ -1279,6 +1273,13 @@ class _ScheduleViewState extends State<ScheduleView> {
                 await _refreshShifts();
               },
             ),
+          ),
+          // Shift Runner table on the right side
+          ShiftRunnerTable(
+            weekStart: normalizedWeekStart,
+            onChanged: () => setState(() {
+              _shiftRunnerRefreshKey++;
+            }),
           ),
         ],
       );
@@ -1714,9 +1715,9 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
   final ShiftTemplateDao _shiftTemplateDao = ShiftTemplateDao();
   final JobCodeSettingsDao _jobCodeDao = JobCodeSettingsDao();
   final ShiftRunnerDao _shiftRunnerDao = ShiftRunnerDao();
-  final ShiftRunnerColorDao _shiftRunnerColorDao = ShiftRunnerColorDao();
+  final ShiftTypeDao _shiftTypeDao = ShiftTypeDao();
   final Map<String, Map<String, dynamic>> _availabilityCache = {};
-  Map<String, String> _shiftRunnerColors = {};
+  List<ShiftType> _shiftTypes = [];
   List<ShiftRunner> _shiftRunners = [];
 
   @override
@@ -1736,13 +1737,14 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
   }
 
   Future<void> _loadShiftRunnerData() async {
-    final colors = await _shiftRunnerColorDao.getColorMap();
+    final shiftTypes = await _shiftTypeDao.getAll();
+    ShiftRunner.setShiftTypes(shiftTypes);
     final weekStart = _normalizeToWeekStart(widget.date);
     final weekEnd = weekStart.add(const Duration(days: 6));
     final runners = await _shiftRunnerDao.getForDateRange(weekStart, weekEnd);
     if (mounted) {
       setState(() {
-        _shiftRunnerColors = colors;
+        _shiftTypes = shiftTypes;
         _shiftRunners = runners;
       });
     }
@@ -2092,10 +2094,15 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
   }
 
   Color _getShiftTypeColor(String shiftType) {
-    final hex =
-        _shiftRunnerColors[shiftType] ??
-        ShiftRunnerColor.defaultColors[shiftType] ??
-        '#808080';
+    final shiftTypeObj = _shiftTypes.cast<ShiftType?>().firstWhere(
+      (st) => st?.key == shiftType,
+      orElse: () => null,
+    );
+    final hex = shiftTypeObj?.colorHex ?? 
+        ShiftType.defaultShiftTypes.firstWhere(
+          (st) => st.key == shiftType,
+          orElse: () => ShiftType.defaultShiftTypes.first,
+        ).colorHex;
     final cleanHex = hex.replaceFirst('#', '');
     return Color(int.parse('FF$cleanHex', radix: 16));
   }
@@ -3261,9 +3268,9 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
   final TimeOffDao _timeOffDao = TimeOffDao();
   final EmployeeAvailabilityDao _availabilityDao = EmployeeAvailabilityDao();
   final ShiftRunnerDao _shiftRunnerDao = ShiftRunnerDao();
-  final ShiftRunnerColorDao _shiftRunnerColorDao = ShiftRunnerColorDao();
+  final ShiftTypeDao _shiftTypeDao = ShiftTypeDao();
   final Map<String, Map<String, dynamic>> _availabilityCache = {};
-  Map<String, String> _shiftRunnerColors = {};
+  List<ShiftType> _shiftTypes = [];
   List<ShiftRunner> _shiftRunners = [];
 
   @override
@@ -3303,24 +3310,30 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
   }
 
   Future<void> _loadShiftRunnerData() async {
-    final colors = await _shiftRunnerColorDao.getColorMap();
+    final shiftTypes = await _shiftTypeDao.getAll();
+    ShiftRunner.setShiftTypes(shiftTypes);
     // Load runners for the whole month
     final firstDay = DateTime(widget.date.year, widget.date.month, 1);
     final lastDay = DateTime(widget.date.year, widget.date.month + 1, 0);
     final runners = await _shiftRunnerDao.getForDateRange(firstDay, lastDay);
     if (mounted) {
       setState(() {
-        _shiftRunnerColors = colors;
+        _shiftTypes = shiftTypes;
         _shiftRunners = runners;
       });
     }
   }
 
   Color _getShiftTypeColor(String shiftType) {
-    final hex =
-        _shiftRunnerColors[shiftType] ??
-        ShiftRunnerColor.defaultColors[shiftType] ??
-        '#808080';
+    final shiftTypeObj = _shiftTypes.cast<ShiftType?>().firstWhere(
+      (st) => st?.key == shiftType,
+      orElse: () => null,
+    );
+    final hex = shiftTypeObj?.colorHex ?? 
+        ShiftType.defaultShiftTypes.firstWhere(
+          (st) => st.key == shiftType,
+          orElse: () => ShiftType.defaultShiftTypes.first,
+        ).colorHex;
     final cleanHex = hex.replaceFirst('#', '');
     return Color(int.parse('FF$cleanHex', radix: 16));
   }

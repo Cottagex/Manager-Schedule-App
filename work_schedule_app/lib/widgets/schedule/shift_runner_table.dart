@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import '../../database/shift_runner_dao.dart';
-import '../../database/shift_runner_color_dao.dart';
+import '../../database/shift_type_dao.dart';
 import '../../database/employee_dao.dart';
 import '../../database/time_off_dao.dart';
 import '../../database/employee_availability_dao.dart';
 import '../../models/shift_runner.dart';
-import '../../models/shift_runner_color.dart';
+import '../../models/shift_type.dart';
 import '../../models/employee.dart';
 
 class ShiftRunnerTable extends StatefulWidget {
@@ -20,14 +20,14 @@ class ShiftRunnerTable extends StatefulWidget {
 
 class _ShiftRunnerTableState extends State<ShiftRunnerTable> {
   final ShiftRunnerDao _dao = ShiftRunnerDao();
-  final ShiftRunnerColorDao _colorDao = ShiftRunnerColorDao();
+  final ShiftTypeDao _shiftTypeDao = ShiftTypeDao();
   final EmployeeDao _employeeDao = EmployeeDao();
   final TimeOffDao _timeOffDao = TimeOffDao();
   final EmployeeAvailabilityDao _availabilityDao = EmployeeAvailabilityDao();
 
   List<ShiftRunner> _runners = [];
   List<Employee> _employees = [];
-  Map<String, String> _colors = {};
+  List<ShiftType> _shiftTypes = [];
   bool _isExpanded = true;
 
   @override
@@ -48,13 +48,17 @@ class _ShiftRunnerTableState extends State<ShiftRunnerTable> {
     final weekEnd = widget.weekStart.add(const Duration(days: 6));
     final runners = await _dao.getForDateRange(widget.weekStart, weekEnd);
     final employees = await _employeeDao.getEmployees();
-    final colors = await _colorDao.getColorMap();
+    
+    // Load shift types and set them in ShiftRunner
+    await _shiftTypeDao.insertDefaultsIfEmpty();
+    final shiftTypes = await _shiftTypeDao.getAll();
+    ShiftRunner.setShiftTypes(shiftTypes);
 
     if (mounted) {
       setState(() {
         _runners = runners;
         _employees = employees;
-        _colors = colors;
+        _shiftTypes = shiftTypes;
       });
     }
   }
@@ -77,10 +81,13 @@ class _ShiftRunnerTableState extends State<ShiftRunnerTable> {
     String shiftType,
     String? currentName,
   ) async {
-    // Get the shift times for availability check
-    final shiftInfo = ShiftRunner.shiftTimes[shiftType]!;
-    final startTime = shiftInfo['start']!;
-    final endTime = shiftInfo['end']!;
+    // Get the shift type info for availability check
+    final shiftTypeObj = _shiftTypes.cast<ShiftType?>().firstWhere(
+      (st) => st?.key == shiftType,
+      orElse: () => null,
+    );
+    final startTime = shiftTypeObj?.defaultShiftStart ?? '09:00';
+    final endTime = shiftTypeObj?.defaultShiftEnd ?? '17:00';
 
     // Load available employees for this shift
     final availableEmployees = await _getAvailableEmployees(
@@ -100,6 +107,8 @@ class _ShiftRunnerTableState extends State<ShiftRunnerTable> {
           currentName: currentName,
           availableEmployees: availableEmployees,
           shiftColor: _getShiftColor(shiftType),
+          startTime: startTime,
+          endTime: endTime,
         );
       },
     );
@@ -160,17 +169,18 @@ class _ShiftRunnerTableState extends State<ShiftRunnerTable> {
       7,
       (i) => widget.weekStart.add(Duration(days: i)),
     );
-    final shiftTypes = ShiftRunner.shiftOrder;
+    final shiftTypeKeys = _shiftTypes.map((t) => t.key).toList();
 
     return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      margin: const EdgeInsets.only(right: 8, top: 4, bottom: 4),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
           // Header with expand/collapse
           InkWell(
             onTap: () => setState(() => _isExpanded = !_isExpanded),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               decoration: BoxDecoration(
                 color: Theme.of(
                   context,
@@ -181,72 +191,60 @@ class _ShiftRunnerTableState extends State<ShiftRunnerTable> {
                 ),
               ),
               child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
-                    _isExpanded ? Icons.expand_less : Icons.expand_more,
-                    size: 20,
+                    _isExpanded ? Icons.chevron_right : Icons.chevron_left,
+                    size: 16,
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 4),
                   const Text(
-                    'Shift Runner',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                  ),
-                  const Spacer(),
-                  Text(
-                    _isExpanded ? 'Click to collapse' : 'Click to expand',
-                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                    'Runners',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
                   ),
                 ],
               ),
             ),
           ),
 
-          // Table content
+          // Table content - rotated: days as rows, shifts as columns
           if (_isExpanded)
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: Table(
-                  defaultColumnWidth: const FixedColumnWidth(80),
-                  columnWidths: const {
-                    0: FixedColumnWidth(60), // Shift type column
-                  },
-                  border: TableBorder.all(
-                    color: Colors.grey.shade300,
-                    width: 1,
-                  ),
-                  children: [
-                    // Header row with days
-                    TableRow(
-                      decoration: BoxDecoration(
-                        color: Theme.of(
-                          context,
-                        ).colorScheme.primaryContainer.withOpacity(0.5),
-                      ),
-                      children: [
-                        _buildHeaderCell(''),
-                        ...days.map(
-                          (d) => _buildHeaderCell(
-                            '${_dayAbbr(d.weekday)}\n${d.month}/${d.day}',
-                          ),
-                        ),
-                      ],
+            Padding(
+              padding: const EdgeInsets.all(6),
+              child: Table(
+                defaultColumnWidth: const FixedColumnWidth(75),
+                columnWidths: const {
+                  0: FixedColumnWidth(60), // Day column
+                },
+                border: TableBorder.all(color: Colors.grey.shade300, width: 1),
+                children: [
+                  // Header row with shift types (rotated text)
+                  TableRow(
+                    decoration: BoxDecoration(
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.primaryContainer.withOpacity(0.5),
                     ),
-                    // Rows for each shift type
-                    ...shiftTypes.map((shiftType) {
-                      return TableRow(
-                        children: [
-                          _buildShiftTypeCell(shiftType),
-                          ...days.map((day) {
-                            final runner = _getRunnerForCell(day, shiftType);
-                            return _buildRunnerCell(day, shiftType, runner);
-                          }),
-                        ],
-                      );
-                    }),
-                  ],
-                ),
+                    children: [
+                      _buildHeaderCell(''),
+                      ...shiftTypeKeys.map(
+                        (shiftType) => _buildRotatedShiftHeader(shiftType),
+                      ),
+                    ],
+                  ),
+                  // Rows for each day
+                  ...days.map((day) {
+                    return TableRow(
+                      children: [
+                        _buildDayCell(day),
+                        ...shiftTypeKeys.map((shiftType) {
+                          final runner = _getRunnerForCell(day, shiftType);
+                          return _buildRunnerCell(day, shiftType, runner);
+                        }),
+                      ],
+                    );
+                  }),
+                ],
               ),
             ),
         ],
@@ -256,19 +254,19 @@ class _ShiftRunnerTableState extends State<ShiftRunnerTable> {
 
   Widget _buildHeaderCell(String text) {
     return Container(
-      padding: const EdgeInsets.all(6),
+      padding: const EdgeInsets.all(4),
       alignment: Alignment.center,
       child: Text(
         text,
         textAlign: TextAlign.center,
-        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
+        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
       ),
     );
   }
 
-  Widget _buildShiftTypeCell(String shiftType) {
+  Widget _buildRotatedShiftHeader(String shiftType) {
     return Container(
-      padding: const EdgeInsets.all(6),
+      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
       alignment: Alignment.center,
       color: _getShiftColor(shiftType).withOpacity(0.2),
       child: Text(
@@ -276,22 +274,36 @@ class _ShiftRunnerTableState extends State<ShiftRunnerTable> {
         textAlign: TextAlign.center,
         style: TextStyle(
           fontWeight: FontWeight.w600,
-          fontSize: 11,
+          fontSize: 14,
           color: _getShiftColor(shiftType),
         ),
       ),
     );
   }
 
+  Widget _buildDayCell(DateTime day) {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      alignment: Alignment.center,
+      color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
+      child: Text(
+        '${_dayAbbr(day.weekday)}\n${day.month}/${day.day}',
+        textAlign: TextAlign.center,
+        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+      ),
+    );
+  }
+
   Widget _buildRunnerCell(DateTime day, String shiftType, String? runner) {
     final hasRunner = runner != null && runner.isNotEmpty;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return InkWell(
       onTap: () => _editRunner(day, shiftType, runner),
       child: Container(
-        padding: const EdgeInsets.all(4),
+        padding: const EdgeInsets.all(3),
         alignment: Alignment.center,
-        constraints: const BoxConstraints(minHeight: 36),
+        constraints: const BoxConstraints(minHeight: 38),
         decoration: BoxDecoration(
           color: hasRunner ? _getShiftColor(shiftType).withOpacity(0.1) : null,
         ),
@@ -299,8 +311,10 @@ class _ShiftRunnerTableState extends State<ShiftRunnerTable> {
           runner ?? '',
           textAlign: TextAlign.center,
           style: TextStyle(
-            fontSize: 11,
-            color: hasRunner ? Colors.black87 : Colors.grey,
+            fontSize: 13,
+            color: hasRunner 
+                ? (isDark ? Colors.white : Colors.black87)
+                : Colors.grey,
           ),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
@@ -310,17 +324,18 @@ class _ShiftRunnerTableState extends State<ShiftRunnerTable> {
   }
 
   Color _getShiftColor(String shiftType) {
-    final hex =
-        _colors[shiftType] ??
-        ShiftRunnerColor.defaultColors[shiftType] ??
-        '#808080';
+    final shiftTypeObj = _shiftTypes.cast<ShiftType?>().firstWhere(
+      (t) => t?.key == shiftType,
+      orElse: () => null,
+    );
+    final hex = shiftTypeObj?.colorHex ?? '#808080';
     final cleanHex = hex.replaceFirst('#', '');
     return Color(int.parse('FF$cleanHex', radix: 16));
   }
 
   String _dayAbbr(int weekday) {
-    const abbrs = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    return abbrs[weekday];
+    const abbrs = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    return abbrs[weekday % 7];
   }
 }
 
@@ -330,6 +345,8 @@ class _ShiftRunnerSearchDialog extends StatefulWidget {
   final String? currentName;
   final List<Employee> availableEmployees;
   final Color shiftColor;
+  final String startTime;
+  final String endTime;
 
   const _ShiftRunnerSearchDialog({
     required this.day,
@@ -337,6 +354,8 @@ class _ShiftRunnerSearchDialog extends StatefulWidget {
     required this.currentName,
     required this.availableEmployees,
     required this.shiftColor,
+    required this.startTime,
+    required this.endTime,
   });
 
   @override
@@ -377,8 +396,6 @@ class _ShiftRunnerSearchDialogState extends State<_ShiftRunnerSearchDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final shiftInfo = ShiftRunner.shiftTimes[widget.shiftType]!;
-
     return AlertDialog(
       title: Row(
         children: [
@@ -400,7 +417,7 @@ class _ShiftRunnerSearchDialogState extends State<_ShiftRunnerSearchDialog> {
                   style: const TextStyle(fontSize: 16),
                 ),
                 Text(
-                  '${widget.day.month}/${widget.day.day} • ${shiftInfo['start']} - ${shiftInfo['end']}',
+                  '${widget.day.month}/${widget.day.day} • ${widget.startTime} - ${widget.endTime}',
                   style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                 ),
               ],

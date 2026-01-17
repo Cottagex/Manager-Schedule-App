@@ -150,6 +150,31 @@ Future<void> _onCreate(Database db, int version) async {
     )
   ''');
 
+  await db.execute('''
+    CREATE TABLE shift_runner_settings (
+      shiftType TEXT PRIMARY KEY,
+      customLabel TEXT,
+      shiftRangeStart TEXT,
+      shiftRangeEnd TEXT,
+      defaultStartTime TEXT,
+      defaultEndTime TEXT
+    )
+  ''');
+
+  await db.execute('''
+    CREATE TABLE shift_types (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      key TEXT NOT NULL UNIQUE,
+      label TEXT NOT NULL,
+      sortOrder INTEGER NOT NULL,
+      rangeStart TEXT NOT NULL,
+      rangeEnd TEXT NOT NULL,
+      defaultShiftStart TEXT NOT NULL,
+      defaultShiftEnd TEXT NOT NULL,
+      colorHex TEXT NOT NULL
+    )
+  ''');
+
   log("✅ Schema created", name: 'AppDatabase');
 } 
 
@@ -182,7 +207,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 13,
+      version: 16,
       onCreate: _onCreate,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -326,6 +351,86 @@ class AppDatabase {
               colorHex TEXT NOT NULL
             )
           ''');
+        }
+
+        if (oldVersion < 14) {
+          // Add shift_runner_settings table for custom labels and default shifts
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS shift_runner_settings (
+              shiftType TEXT PRIMARY KEY,
+              customLabel TEXT,
+              shiftRangeStart TEXT,
+              shiftRangeEnd TEXT,
+              defaultStartTime TEXT,
+              defaultEndTime TEXT
+            )
+          ''');
+        }
+
+        if (oldVersion < 15) {
+          // Add shiftRangeStart and shiftRangeEnd columns to shift_runner_settings
+          try {
+            await db.execute('ALTER TABLE shift_runner_settings ADD COLUMN shiftRangeStart TEXT');
+            await db.execute('ALTER TABLE shift_runner_settings ADD COLUMN shiftRangeEnd TEXT');
+          } catch (_) {
+            // Columns may already exist if table was created in v14 with the new schema
+          }
+        }
+
+        if (oldVersion < 16) {
+          // Add shift_types table for configurable shift types
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS shift_types (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              key TEXT NOT NULL UNIQUE,
+              label TEXT NOT NULL,
+              sortOrder INTEGER NOT NULL,
+              rangeStart TEXT NOT NULL,
+              rangeEnd TEXT NOT NULL,
+              defaultShiftStart TEXT NOT NULL,
+              defaultShiftEnd TEXT NOT NULL,
+              colorHex TEXT NOT NULL
+            )
+          ''');
+
+          // Migrate existing data from shift_runner_colors and shift_runner_settings
+          // First, check if we have any existing settings/colors
+          final colors = await db.query('shift_runner_colors');
+          final settings = await db.query('shift_runner_settings');
+          
+          final colorMap = <String, String>{};
+          for (final row in colors) {
+            colorMap[row['shiftType'] as String] = row['colorHex'] as String;
+          }
+          
+          final settingsMap = <String, Map<String, dynamic>>{};
+          for (final row in settings) {
+            settingsMap[row['shiftType'] as String] = row;
+          }
+
+          // Default shift configurations
+          final defaults = [
+            {'key': 'open', 'label': 'Open', 'sortOrder': 0, 'rangeStart': '04:30', 'rangeEnd': '11:00', 'colorHex': '#FF9800'},
+            {'key': 'lunch', 'label': 'Lunch', 'sortOrder': 1, 'rangeStart': '11:00', 'rangeEnd': '15:00', 'colorHex': '#4CAF50'},
+            {'key': 'dinner', 'label': 'Dinner', 'sortOrder': 2, 'rangeStart': '15:00', 'rangeEnd': '20:00', 'colorHex': '#2196F3'},
+            {'key': 'close', 'label': 'Close', 'sortOrder': 3, 'rangeStart': '20:00', 'rangeEnd': '01:00', 'colorHex': '#9C27B0'},
+          ];
+
+          for (final def in defaults) {
+            final key = def['key'] as String;
+            final existingSettings = settingsMap[key];
+            
+            await db.insert('shift_types', {
+              'key': key,
+              'label': existingSettings?['customLabel'] ?? def['label'],
+              'sortOrder': def['sortOrder'],
+              'rangeStart': existingSettings?['shiftRangeStart'] ?? def['rangeStart'],
+              'rangeEnd': existingSettings?['shiftRangeEnd'] ?? def['rangeEnd'],
+              'defaultShiftStart': existingSettings?['defaultStartTime'] ?? def['rangeStart'],
+              'defaultShiftEnd': existingSettings?['defaultEndTime'] ?? def['rangeEnd'],
+              'colorHex': colorMap[key] ?? def['colorHex'],
+            });
+          }
         }
       },
     );
