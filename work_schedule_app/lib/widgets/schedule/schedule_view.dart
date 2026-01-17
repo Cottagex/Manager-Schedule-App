@@ -1530,18 +1530,15 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     int selStart = 0;
     int selEnd = 16;
     ShiftTemplate? selectedTemplate;
-    final runnerController = TextEditingController();
-    String? detectedShiftType;
-
-    // Helper to detect shift type from selected time
-    String? getShiftTypeFromIndex(int startIdx) {
-      final time = times[startIdx];
-      return ShiftRunner.getShiftTypeForTime(time.hour, time.minute);
-    }
+    String? selectedRunnerShift; // Track which shift runner button is selected
+    
+    // Get the employee name for runner assignment
+    final employee = widget.employees.firstWhere(
+      (e) => e.id == employeeId,
+      orElse: () => widget.employees.first,
+    );
 
     return StatefulBuilder(builder: (context, setDialogState) {
-      detectedShiftType = getShiftTypeFromIndex(selStart);
-      
       return AlertDialog(
         title: const Text('Add Shift'),
         content: Row(
@@ -1667,7 +1664,7 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
             ),
             // Shift Runner column (right)
             Container(
-              width: 130,
+              width: 100,
               padding: const EdgeInsets.only(left: 16),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -1675,70 +1672,46 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
                 children: [
                   const Text('Shift Runner:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                   const SizedBox(height: 8),
-                  if (detectedShiftType != null) ...[
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: _getShiftTypeColor(detectedShiftType!).withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(color: _getShiftTypeColor(detectedShiftType!)),
-                      ),
-                      child: Text(
-                        ShiftRunner.getLabelForType(detectedShiftType!),
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: _getShiftTypeColor(detectedShiftType!),
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: runnerController,
-                      decoration: const InputDecoration(
-                        hintText: 'Runner name',
-                        isDense: true,
-                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-                        border: OutlineInputBorder(),
-                      ),
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                    const SizedBox(height: 8),
-                    // Quick select from employees
-                    SizedBox(
-                      height: 100,
-                      child: ListView.builder(
-                        shrinkWrap: true,
-                        itemCount: widget.employees.length,
-                        itemBuilder: (context, index) {
-                          final emp = widget.employees[index];
-                          return InkWell(
-                            onTap: () {
-                              setDialogState(() {
-                                runnerController.text = emp.name;
-                              });
-                            },
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 2),
-                              child: Text(
-                                emp.name,
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: runnerController.text == emp.name ? Colors.blue : null,
-                                  fontWeight: runnerController.text == emp.name ? FontWeight.bold : null,
-                                ),
-                              ),
-                            ),
-                          );
+                  ...ShiftRunner.shiftOrder.map((shiftType) {
+                    final isSelected = selectedRunnerShift == shiftType;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: InkWell(
+                        onTap: () {
+                          setDialogState(() {
+                            if (selectedRunnerShift == shiftType) {
+                              selectedRunnerShift = null; // Deselect if already selected
+                            } else {
+                              selectedRunnerShift = shiftType;
+                            }
+                          });
                         },
+                        borderRadius: BorderRadius.circular(4),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: isSelected 
+                                ? _getShiftTypeColor(shiftType).withOpacity(0.3)
+                                : _getShiftTypeColor(shiftType).withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                              color: _getShiftTypeColor(shiftType),
+                              width: isSelected ? 2 : 1,
+                            ),
+                          ),
+                          child: Text(
+                            ShiftRunner.getLabelForType(shiftType),
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                              color: _getShiftTypeColor(shiftType),
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
                       ),
-                    ),
-                  ] else
-                    const Text(
-                      'Select a time to assign a shift runner',
-                      style: TextStyle(fontSize: 10, color: Colors.grey),
-                    ),
+                    );
+                  }).toList(),
                 ],
               ),
             ),
@@ -1751,13 +1724,12 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
               final newStart = _timeOfDayToDateTime(day, times[selStart]);
               final newEnd = _timeOfDayToDateTime(day, times[selEnd]);
               
-              // Save shift runner if assigned
-              final runnerName = runnerController.text.trim();
-              if (runnerName.isNotEmpty && detectedShiftType != null) {
+              // Save shift runner if a shift was selected
+              if (selectedRunnerShift != null) {
                 await _shiftRunnerDao.upsert(ShiftRunner(
                   date: day,
-                  shiftType: detectedShiftType!,
-                  runnerName: runnerName,
+                  shiftType: selectedRunnerShift!,
+                  runnerName: employee.name,
                 ));
               }
               
