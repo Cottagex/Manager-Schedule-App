@@ -4,6 +4,7 @@ import '../models/employee.dart';
 import '../database/job_code_settings_dao.dart';
 import '../models/job_code_settings.dart';
 import 'employee_availability_page.dart';
+import '../widgets/csv_import_dialog.dart';
 
 final JobCodeSettingsDao _jobCodeDao = JobCodeSettingsDao();
 List<JobCodeSettings> _jobCodes = [];
@@ -251,11 +252,38 @@ class _RosterPageState extends State<RosterPage> {
     }
   }
 
+  Future<void> _showImportDialog() async {
+    final importedCount = await showDialog<int>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const CsvImportDialog(),
+    );
+
+    if (importedCount != null && importedCount > 0) {
+      await _loadEmployees();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Successfully imported $importedCount employee${importedCount == 1 ? '' : 's'}'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text("Roster"),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.upload_file),
+            tooltip: 'Import from CSV',
+            onPressed: _showImportDialog,
+          ),
+        ],
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: _addEmployee,
