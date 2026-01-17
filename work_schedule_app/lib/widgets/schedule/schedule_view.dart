@@ -50,8 +50,11 @@ class ScheduleView extends StatefulWidget {
   final DateTime initialDate;
   final ScheduleMode initialMode;
 
-  ScheduleView({super.key, DateTime? date, this.initialMode = ScheduleMode.weekly})
-      : initialDate = date ?? DateTime.now();
+  ScheduleView({
+    super.key,
+    DateTime? date,
+    this.initialMode = ScheduleMode.weekly,
+  }) : initialDate = date ?? DateTime.now();
 
   @override
   State<ScheduleView> createState() => _ScheduleViewState();
@@ -81,6 +84,9 @@ class _ScheduleViewState extends State<ScheduleView> {
 
   // Undo/Redo manager
   final ScheduleUndoManager _undoManager = ScheduleUndoManager();
+
+  // Counter to trigger shift runner refresh in child views
+  int _shiftRunnerRefreshKey = 0;
 
   @override
   void initState() {
@@ -126,20 +132,24 @@ class _ScheduleViewState extends State<ScheduleView> {
   }
 
   List<ShiftPlaceholder> _shiftsToPlaceholders(List<Shift> shifts) {
-    return shifts.map((s) => ShiftPlaceholder(
-      id: s.id,
-      employeeId: s.employeeId,
-      start: s.startTime,
-      end: s.endTime,
-      text: s.label ?? '',
-    )).toList();
+    return shifts
+        .map(
+          (s) => ShiftPlaceholder(
+            id: s.id,
+            employeeId: s.employeeId,
+            start: s.startTime,
+            end: s.endTime,
+            text: s.label ?? '',
+          ),
+        )
+        .toList();
   }
 
   Future<void> _refreshShifts() async {
     // Load time-off entries
     final timeOffEntries = await _timeOffDao.getAllTimeOff();
     final timeOffShifts = _timeOffToShifts(timeOffEntries);
-    
+
     // Load actual shifts from database based on current view
     List<Shift> dbShifts;
     if (_mode == ScheduleMode.monthly) {
@@ -150,7 +160,7 @@ class _ScheduleViewState extends State<ScheduleView> {
       dbShifts = await _shiftDao.getByDate(_date);
     }
     final workShifts = _shiftsToPlaceholders(dbShifts);
-    
+
     // Load notes based on current view
     Map<DateTime, ScheduleNote> notes;
     if (_mode == ScheduleMode.monthly) {
@@ -158,7 +168,7 @@ class _ScheduleViewState extends State<ScheduleView> {
     } else {
       notes = await _noteDao.getByWeek(_date);
     }
-    
+
     if (!mounted) return;
     setState(() {
       // Combine database time-off shifts with work shifts from database
@@ -186,13 +196,15 @@ class _ScheduleViewState extends State<ScheduleView> {
     if (_filterType == 'all') {
       _filteredEmployees = List.from(_employees);
     } else if (_filterType == 'jobCode' && _selectedJobCode != null) {
-      _filteredEmployees = _employees.where((e) => 
-        e.jobCode.toLowerCase() == _selectedJobCode!.toLowerCase()
-      ).toList();
+      _filteredEmployees = _employees
+          .where(
+            (e) => e.jobCode.toLowerCase() == _selectedJobCode!.toLowerCase(),
+          )
+          .toList();
     } else if (_filterType == 'employee' && _selectedEmployeeId != null) {
-      _filteredEmployees = _employees.where((e) => 
-        e.id == _selectedEmployeeId
-      ).toList();
+      _filteredEmployees = _employees
+          .where((e) => e.id == _selectedEmployeeId)
+          .toList();
     } else {
       _filteredEmployees = List.from(_employees);
     }
@@ -208,7 +220,8 @@ class _ScheduleViewState extends State<ScheduleView> {
     // Build hierarchy from job code settings (sorted by sortOrder)
     final hierarchy = <String, int>{};
     for (int i = 0; i < _jobCodeSettings.length; i++) {
-      hierarchy[_jobCodeSettings[i].code.toLowerCase()] = _jobCodeSettings[i].sortOrder;
+      hierarchy[_jobCodeSettings[i].code.toLowerCase()] =
+          _jobCodeSettings[i].sortOrder;
     }
 
     final sorted = List<Employee>.from(employees);
@@ -329,8 +342,10 @@ class _ScheduleViewState extends State<ScheduleView> {
           shifts: _shifts,
           jobCodeSettings: _jobCodeSettings,
         );
-        title = 'Schedule - Week of ${weekStart.month}/${weekStart.day}/${weekStart.year}';
-        filename = 'schedule_${weekStart.year}_${weekStart.month}_${weekStart.day}.pdf';
+        title =
+            'Schedule - Week of ${weekStart.month}/${weekStart.day}/${weekStart.year}';
+        filename =
+            'schedule_${weekStart.year}_${weekStart.month}_${weekStart.day}.pdf';
       } else {
         pdfBytes = await SchedulePdfService.generateMonthlyPdf(
           year: _date.year,
@@ -339,7 +354,20 @@ class _ScheduleViewState extends State<ScheduleView> {
           shifts: _shifts,
           jobCodeSettings: _jobCodeSettings,
         );
-        final monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        final monthNames = [
+          'Jan',
+          'Feb',
+          'Mar',
+          'Apr',
+          'May',
+          'Jun',
+          'Jul',
+          'Aug',
+          'Sep',
+          'Oct',
+          'Nov',
+          'Dec',
+        ];
         title = 'Schedule - ${monthNames[_date.month - 1]} ${_date.year}';
         filename = 'schedule_${_date.year}_${_date.month}.pdf';
       }
@@ -351,9 +379,9 @@ class _ScheduleViewState extends State<ScheduleView> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to generate PDF: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to generate PDF: $e')));
       }
     }
   }
@@ -361,8 +389,12 @@ class _ScheduleViewState extends State<ScheduleView> {
   Future<void> _handleWeekAction(String action) async {
     // Get current week start (Sunday)
     final weekStart = _date.subtract(Duration(days: _date.weekday % 7));
-    final weekStartDate = DateTime(weekStart.year, weekStart.month, weekStart.day);
-    
+    final weekStartDate = DateTime(
+      weekStart.year,
+      weekStart.month,
+      weekStart.day,
+    );
+
     if (action == 'copyWeekToNext') {
       final nextWeekStart = weekStartDate.add(const Duration(days: 7));
       await _copyWeekTo(weekStartDate, nextWeekStart);
@@ -378,10 +410,13 @@ class _ScheduleViewState extends State<ScheduleView> {
     }
   }
 
-  Future<void> _copyWeekTo(DateTime sourceWeekStart, DateTime targetWeekStart) async {
+  Future<void> _copyWeekTo(
+    DateTime sourceWeekStart,
+    DateTime targetWeekStart,
+  ) async {
     // Get all shifts from source week
     final sourceShifts = await _shiftDao.getByWeek(sourceWeekStart);
-    
+
     if (sourceShifts.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -390,7 +425,7 @@ class _ScheduleViewState extends State<ScheduleView> {
       }
       return;
     }
-    
+
     // Confirm the copy
     if (!mounted) return;
     final confirm = await showDialog<bool>(
@@ -400,7 +435,7 @@ class _ScheduleViewState extends State<ScheduleView> {
         content: Text(
           'Copy ${sourceShifts.length} shift(s) from week of '
           '${sourceWeekStart.month}/${sourceWeekStart.day} '
-          'to week of ${targetWeekStart.month}/${targetWeekStart.day}?'
+          'to week of ${targetWeekStart.month}/${targetWeekStart.day}?',
         ),
         actions: [
           TextButton(
@@ -414,12 +449,12 @@ class _ScheduleViewState extends State<ScheduleView> {
         ],
       ),
     );
-    
+
     if (confirm != true) return;
-    
+
     // Calculate the offset between weeks
     final dayOffset = targetWeekStart.difference(sourceWeekStart).inDays;
-    
+
     // Create new shifts for the target week
     final newShifts = sourceShifts.map((s) {
       return Shift(
@@ -430,29 +465,31 @@ class _ScheduleViewState extends State<ScheduleView> {
         notes: s.notes,
       );
     }).toList();
-    
+
     // Insert all new shifts
     await _shiftDao.insertAll(newShifts);
-    
+
     // Navigate to target week and refresh
     setState(() {
       _date = targetWeekStart;
     });
     await _refreshShifts();
-    
+
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Copied ${newShifts.length} shift(s) to new week')),
+        SnackBar(
+          content: Text('Copied ${newShifts.length} shift(s) to new week'),
+        ),
       );
     }
   }
 
   Future<void> _clearWeek(DateTime weekStart) async {
     final weekEnd = weekStart.add(const Duration(days: 7));
-    
+
     // Count shifts to clear
     final shifts = await _shiftDao.getByWeek(weekStart);
-    
+
     if (shifts.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -461,7 +498,7 @@ class _ScheduleViewState extends State<ScheduleView> {
       }
       return;
     }
-    
+
     // Confirm the clear
     if (!mounted) return;
     final confirm = await showDialog<bool>(
@@ -476,7 +513,7 @@ class _ScheduleViewState extends State<ScheduleView> {
         ),
         content: Text(
           'Are you sure you want to delete ${shifts.length} shift(s) from this week?\n\n'
-          'This action cannot be undone.'
+          'This action cannot be undone.',
         ),
         actions: [
           TextButton(
@@ -491,21 +528,26 @@ class _ScheduleViewState extends State<ScheduleView> {
         ],
       ),
     );
-    
+
     if (confirm != true) return;
-    
+
     // Delete all shifts in the week
     await _shiftDao.deleteByDateRange(weekStart, weekEnd);
     await _refreshShifts();
-    
+
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Cleared ${shifts.length} shift(s) from this week')),
+        SnackBar(
+          content: Text('Cleared ${shifts.length} shift(s) from this week'),
+        ),
       );
     }
   }
 
-  Future<DateTime?> _showWeekPicker(BuildContext context, DateTime currentWeek) async {
+  Future<DateTime?> _showWeekPicker(
+    BuildContext context,
+    DateTime currentWeek,
+  ) async {
     return showDatePicker(
       context: context,
       initialDate: currentWeek.add(const Duration(days: 7)),
@@ -526,12 +568,14 @@ class _ScheduleViewState extends State<ScheduleView> {
   Future<void> _autoFillFromTemplates(DateTime weekStart) async {
     // Get all templates
     final templates = await _templateDao.getAllTemplates();
-    
+
     if (templates.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('No shift templates defined. Go to Settings > Shift Templates to create some.'),
+            content: Text(
+              'No shift templates defined. Go to Settings > Shift Templates to create some.',
+            ),
             duration: Duration(seconds: 4),
           ),
         );
@@ -544,13 +588,19 @@ class _ScheduleViewState extends State<ScheduleView> {
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) {
-        final selectedDays = <int>{1, 2, 3, 4, 5}; // Mon-Fri default (1=Mon, 5=Fri in this context)
+        final selectedDays = <int>{
+          1,
+          2,
+          3,
+          4,
+          5,
+        }; // Mon-Fri default (1=Mon, 5=Fri in this context)
         bool skipExisting = true;
-        
+
         return StatefulBuilder(
           builder: (context, setDialogState) {
             final dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-            
+
             return AlertDialog(
               title: const Row(
                 children: [
@@ -595,7 +645,8 @@ class _ScheduleViewState extends State<ScheduleView> {
                       title: const Text('Skip employees with existing shifts'),
                       value: skipExisting,
                       contentPadding: EdgeInsets.zero,
-                      onChanged: (v) => setDialogState(() => skipExisting = v ?? true),
+                      onChanged: (v) =>
+                          setDialogState(() => skipExisting = v ?? true),
                     ),
                   ],
                 ),
@@ -619,12 +670,12 @@ class _ScheduleViewState extends State<ScheduleView> {
         );
       },
     );
-    
+
     if (result == null) return;
-    
+
     final selectedDays = result['days'] as List<int>;
     final skipExisting = result['skipExisting'] as bool;
-    
+
     if (selectedDays.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -633,76 +684,104 @@ class _ScheduleViewState extends State<ScheduleView> {
       }
       return;
     }
-    
+
     // Generate shifts
     int shiftsCreated = 0;
     final newShifts = <Shift>[];
-    
+
     for (final employee in _employees) {
       if (templates.isEmpty) continue;
 
       // Templates are shared across job codes; use the first template.
       final template = templates.first;
-      
+
       // Parse template start time (e.g., "09:00" in HH:MM format)
       final startTimeParts = template.startTime.split(':');
       final startHour = int.parse(startTimeParts[0]);
-      final startMinute = startTimeParts.length > 1 ? int.parse(startTimeParts[1]) : 0;
-      
+      final startMinute = startTimeParts.length > 1
+          ? int.parse(startTimeParts[1])
+          : 0;
+
       // Parse template end time
       final endTimeParts = template.endTime.split(':');
       final endHour = int.parse(endTimeParts[0]);
-      final endMinute = endTimeParts.length > 1 ? int.parse(endTimeParts[1]) : 0;
-      
+      final endMinute = endTimeParts.length > 1
+          ? int.parse(endTimeParts[1])
+          : 0;
+
       for (final dayIndex in selectedDays) {
         final day = weekStart.add(Duration(days: dayIndex));
-        
+
         // Check if employee already has a shift this day
         if (skipExisting) {
-          final existingShifts = _shifts.where((s) =>
-            s.employeeId == employee.id &&
-            s.start.year == day.year &&
-            s.start.month == day.month &&
-            s.start.day == day.day
-          ).toList();
-          
+          final existingShifts = _shifts
+              .where(
+                (s) =>
+                    s.employeeId == employee.id &&
+                    s.start.year == day.year &&
+                    s.start.month == day.month &&
+                    s.start.day == day.day,
+              )
+              .toList();
+
           if (existingShifts.isNotEmpty) continue;
         }
-        
-        final shiftStart = DateTime(day.year, day.month, day.day, startHour, startMinute);
-        var shiftEnd = DateTime(day.year, day.month, day.day, endHour, endMinute);
-        
+
+        final shiftStart = DateTime(
+          day.year,
+          day.month,
+          day.day,
+          startHour,
+          startMinute,
+        );
+        var shiftEnd = DateTime(
+          day.year,
+          day.month,
+          day.day,
+          endHour,
+          endMinute,
+        );
+
         // Handle overnight shifts (end time is next day)
-        if (shiftEnd.isBefore(shiftStart) || shiftEnd.isAtSameMomentAs(shiftStart)) {
+        if (shiftEnd.isBefore(shiftStart) ||
+            shiftEnd.isAtSameMomentAs(shiftStart)) {
           shiftEnd = shiftEnd.add(const Duration(days: 1));
         }
-        
-        newShifts.add(Shift(
-          employeeId: employee.id!,
-          startTime: shiftStart,
-          endTime: shiftEnd,
-          label: template.templateName,
-        ));
+
+        newShifts.add(
+          Shift(
+            employeeId: employee.id!,
+            startTime: shiftStart,
+            endTime: shiftEnd,
+            label: template.templateName,
+          ),
+        );
         shiftsCreated++;
       }
     }
-    
+
     if (newShifts.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No shifts were created (all slots already filled or no matching templates)')),
+          const SnackBar(
+            content: Text(
+              'No shifts were created (all slots already filled or no matching templates)',
+            ),
+          ),
         );
       }
       return;
     }
-    
+
     // Insert all shifts
     await _shiftDao.insertAll(newShifts);
     await _refreshShifts();
-    
+
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Created $shiftsCreated shift(s) from templates')),
+        SnackBar(
+          content: Text('Created $shiftsCreated shift(s) from templates'),
+        ),
       );
     }
   }
@@ -754,9 +833,11 @@ class _ScheduleViewState extends State<ScheduleView> {
               value: _selectedJobCode,
               hint: const Text('Select Job Code'),
               underline: const SizedBox(),
-              items: _uniqueJobCodes.map((code) => 
-                DropdownMenuItem(value: code, child: Text(code))
-              ).toList(),
+              items: _uniqueJobCodes
+                  .map(
+                    (code) => DropdownMenuItem(value: code, child: Text(code)),
+                  )
+                  .toList(),
               onChanged: (value) {
                 setState(() {
                   _selectedJobCode = value;
@@ -769,9 +850,12 @@ class _ScheduleViewState extends State<ScheduleView> {
               value: _selectedEmployeeId,
               hint: const Text('Select Employee'),
               underline: const SizedBox(),
-              items: _employees.map((emp) => 
-                DropdownMenuItem(value: emp.id, child: Text(emp.name))
-              ).toList(),
+              items: _employees
+                  .map(
+                    (emp) =>
+                        DropdownMenuItem(value: emp.id, child: Text(emp.name)),
+                  )
+                  .toList(),
               onChanged: (value) {
                 setState(() {
                   _selectedEmployeeId = value;
@@ -808,7 +892,7 @@ class _ScheduleViewState extends State<ScheduleView> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 IconButton(
-                  onPressed: _prev, 
+                  onPressed: _prev,
                   icon: const Icon(Icons.chevron_left),
                   padding: const EdgeInsets.all(8),
                   constraints: const BoxConstraints(),
@@ -818,13 +902,16 @@ class _ScheduleViewState extends State<ScheduleView> {
                   _mode == ScheduleMode.monthly
                       ? "${_monthName(_date.month)} ${_date.year}"
                       : _mode == ScheduleMode.weekly
-                          ? "Week of ${_date.month}/${_date.day}/${_date.year}"
-                          : "${_dayOfWeekAbbr(_date)}, ${_monthName(_date.month)} ${_date.day}, ${_date.year}",
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                      ? "Week of ${_date.month}/${_date.day}/${_date.year}"
+                      : "${_dayOfWeekAbbr(_date)}, ${_monthName(_date.month)} ${_date.day}, ${_date.year}",
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                  ),
                 ),
                 const SizedBox(width: 8),
                 IconButton(
-                  onPressed: _next, 
+                  onPressed: _next,
                   icon: const Icon(Icons.chevron_right),
                   padding: const EdgeInsets.all(8),
                   constraints: const BoxConstraints(),
@@ -847,16 +934,25 @@ class _ScheduleViewState extends State<ScheduleView> {
             _refreshShifts();
           },
           children: const [
-            Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('Daily')),
-            Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('Weekly')),
-            Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('Monthly')),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              child: Text('Daily'),
+            ),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              child: Text('Weekly'),
+            ),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              child: Text('Monthly'),
+            ),
           ],
         ),
         const SizedBox(width: 8),
         // Undo button
         Tooltip(
-          message: _undoManager.canUndo 
-              ? 'Undo ${_undoManager.undoDescription ?? ''}' 
+          message: _undoManager.canUndo
+              ? 'Undo ${_undoManager.undoDescription ?? ''}'
               : 'Nothing to undo',
           child: IconButton(
             icon: const Icon(Icons.undo),
@@ -865,8 +961,8 @@ class _ScheduleViewState extends State<ScheduleView> {
         ),
         // Redo button
         Tooltip(
-          message: _undoManager.canRedo 
-              ? 'Redo ${_undoManager.redoDescription ?? ''}' 
+          message: _undoManager.canRedo
+              ? 'Redo ${_undoManager.redoDescription ?? ''}'
               : 'Nothing to redo',
           child: IconButton(
             icon: const Icon(Icons.redo),
@@ -944,7 +1040,10 @@ class _ScheduleViewState extends State<ScheduleView> {
                   children: [
                     Icon(Icons.delete_sweep, size: 20, color: Colors.red),
                     SizedBox(width: 8),
-                    Text('Clear This Week', style: TextStyle(color: Colors.red)),
+                    Text(
+                      'Clear This Week',
+                      style: TextStyle(color: Colors.red),
+                    ),
                   ],
                 ),
               ),
@@ -956,176 +1055,229 @@ class _ScheduleViewState extends State<ScheduleView> {
 
   Widget _buildBody() {
     if (_mode == ScheduleMode.daily) {
-      return DailyScheduleView(date: _date, employees: _filteredEmployees, shifts: _shifts);
+      return DailyScheduleView(
+        date: _date,
+        employees: _filteredEmployees,
+        shifts: _shifts,
+      );
     }
     if (_mode == ScheduleMode.weekly) {
       // Calculate week start (Sunday)
       final weekStart = _date.subtract(Duration(days: _date.weekday % 7));
-      final normalizedWeekStart = DateTime(weekStart.year, weekStart.month, weekStart.day);
-      
+      final normalizedWeekStart = DateTime(
+        weekStart.year,
+        weekStart.month,
+        weekStart.day,
+      );
+
       return Column(
         children: [
           // Shift Runner table at the top
           ShiftRunnerTable(
             weekStart: normalizedWeekStart,
-            onChanged: () => setState(() {}),
+            onChanged: () => setState(() {
+              _shiftRunnerRefreshKey++;
+            }),
           ),
           // Weekly schedule below
           Expanded(
             child: WeeklyScheduleView(
-      date: _date,
-      employees: _filteredEmployees,
-      shifts: _shifts,
-      notes: _notes,
-      jobCodeSettings: _jobCodeSettings,
-      clipboardAvailable: _clipboard != null,
-      onCopyShift: (s) {
-        setState(() {
-          _clipboard = {'start': TimeOfDay(hour: s.start.hour, minute: s.start.minute), 'duration': s.end.difference(s.start), 'text': s.text};
-        });
-      },
-      onSaveNote: (day, note) async {
-        final scheduleNote = ScheduleNote(date: day, note: note);
-        await _noteDao.upsert(scheduleNote);
-        await _refreshShifts();
-      },
-      onDeleteNote: (day) async {
-        await _noteDao.deleteByDate(day);
-        await _refreshShifts();
-      },
-      onPasteTarget: (day, employeeId) async {
-        if (_clipboard == null) {
-          return;
-        }
-        final tod = _clipboard!['start'] as TimeOfDay;
-        final dur = _clipboard!['duration'] as Duration;
-        DateTime start = DateTime(day.year, day.month, day.day, tod.hour, tod.minute);
-        // times with hour 0 or 1 are next-day
-        if (tod.hour == 0 || tod.hour == 1) start = start.add(const Duration(days: 1));
-        final end = start.add(dur);
-        
-        // Check for conflicts
-        final hasConflict = await _shiftDao.hasConflict(employeeId, start, end);
-        if (hasConflict && mounted) {
-          final proceed = await _showConflictWarning(context, employeeId, start, end);
-          if (!proceed) return;
-        }
-        
-        // Save to database with undo support
-        final shift = Shift(
-          employeeId: employeeId,
-          startTime: start,
-          endTime: end,
-          label: _clipboard!['text'] as String,
-        );
-        await _insertShiftWithUndo(shift);
-        _clipboard = null;
-        await _refreshShifts();
-      },
-      onUpdateShift: (oldShift, newStart, newEnd) async {
-        if (newStart == newEnd) {
-          // Delete with undo support
-          if (oldShift.id != null) {
-            final shiftToDelete = Shift(
-              id: oldShift.id,
-              employeeId: oldShift.employeeId,
-              startTime: oldShift.start,
-              endTime: oldShift.end,
-              label: oldShift.text,
-            );
-            await _deleteShiftWithUndo(shiftToDelete);
-          }
-        } else {
-          // Check for conflicts (exclude current shift if editing)
-          final hasConflict = await _shiftDao.hasConflict(
-            oldShift.employeeId, newStart, newEnd, 
-            excludeId: oldShift.id,
-          );
-          if (hasConflict && mounted) {
-            final proceed = await _showConflictWarning(context, oldShift.employeeId, newStart, newEnd, excludeId: oldShift.id);
-            if (!proceed) return;
-          }
-          
-          // Update or add with undo support
-          if (oldShift.id != null) {
-            // Update existing
-            final oldShiftModel = Shift(
-              id: oldShift.id,
-              employeeId: oldShift.employeeId,
-              startTime: oldShift.start,
-              endTime: oldShift.end,
-              label: oldShift.text,
-            );
-            final updated = Shift(
-              id: oldShift.id,
-              employeeId: oldShift.employeeId,
-              startTime: newStart,
-              endTime: newEnd,
-              label: oldShift.text,
-            );
-            await _updateShiftWithUndo(oldShiftModel, updated);
-          } else {
-            // Insert new
-            final newShift = Shift(
-              employeeId: oldShift.employeeId,
-              startTime: newStart,
-              endTime: newEnd,
-              label: oldShift.text,
-            );
-            await _insertShiftWithUndo(newShift);
-          }
-        }
-        await _refreshShifts();
-      },
-      onMoveShift: (shift, newDay, newEmployeeId) async {
-        // Move shift to a new day and/or employee
-        // Calculate the shift duration to preserve time
-        final duration = shift.end.difference(shift.start);
-        final newStart = DateTime(
-          newDay.year, newDay.month, newDay.day,
-          shift.start.hour, shift.start.minute,
-        );
-        final newEnd = newStart.add(duration);
-        
-        // Check for conflicts
-        final hasConflict = await _shiftDao.hasConflict(
-          newEmployeeId, newStart, newEnd,
-          excludeId: shift.id,
-        );
-        if (hasConflict && mounted) {
-          final proceed = await _showConflictWarning(context, newEmployeeId, newStart, newEnd, excludeId: shift.id);
-          if (!proceed) return;
-        }
-        
-        if (shift.id != null) {
-          // Update existing shift with new employee and times with undo support
-          final oldShiftModel = Shift(
-            id: shift.id,
-            employeeId: shift.employeeId,
-            startTime: shift.start,
-            endTime: shift.end,
-            label: shift.text,
-          );
-          final updated = Shift(
-            id: shift.id,
-            employeeId: newEmployeeId,
-            startTime: newStart,
-            endTime: newEnd,
-            label: shift.text,
-          );
-          await _moveShiftWithUndo(oldShiftModel, updated);
-        } else {
-          // Insert as new (shouldn't happen for drag, but handle it)
-          final newShift = Shift(
-            employeeId: newEmployeeId,
-            startTime: newStart,
-            endTime: newEnd,
-            label: shift.text,
-          );
-          await _insertShiftWithUndo(newShift);
-        }
-        await _refreshShifts();
-      },
+              date: _date,
+              employees: _filteredEmployees,
+              shifts: _shifts,
+              notes: _notes,
+              jobCodeSettings: _jobCodeSettings,
+              clipboardAvailable: _clipboard != null,
+              shiftRunnerRefreshKey: _shiftRunnerRefreshKey,
+              onCopyShift: (s) {
+                setState(() {
+                  _clipboard = {
+                    'start': TimeOfDay(
+                      hour: s.start.hour,
+                      minute: s.start.minute,
+                    ),
+                    'duration': s.end.difference(s.start),
+                    'text': s.text,
+                  };
+                });
+              },
+              onSaveNote: (day, note) async {
+                final scheduleNote = ScheduleNote(date: day, note: note);
+                await _noteDao.upsert(scheduleNote);
+                await _refreshShifts();
+              },
+              onDeleteNote: (day) async {
+                await _noteDao.deleteByDate(day);
+                await _refreshShifts();
+              },
+              onPasteTarget: (day, employeeId) async {
+                if (_clipboard == null) {
+                  return;
+                }
+                final tod = _clipboard!['start'] as TimeOfDay;
+                final dur = _clipboard!['duration'] as Duration;
+                DateTime start = DateTime(
+                  day.year,
+                  day.month,
+                  day.day,
+                  tod.hour,
+                  tod.minute,
+                );
+                // times with hour 0 or 1 are next-day
+                if (tod.hour == 0 || tod.hour == 1)
+                  start = start.add(const Duration(days: 1));
+                final end = start.add(dur);
+
+                // Check for conflicts
+                final hasConflict = await _shiftDao.hasConflict(
+                  employeeId,
+                  start,
+                  end,
+                );
+                if (hasConflict && mounted) {
+                  final proceed = await _showConflictWarning(
+                    context,
+                    employeeId,
+                    start,
+                    end,
+                  );
+                  if (!proceed) return;
+                }
+
+                // Save to database with undo support
+                final shift = Shift(
+                  employeeId: employeeId,
+                  startTime: start,
+                  endTime: end,
+                  label: _clipboard!['text'] as String,
+                );
+                await _insertShiftWithUndo(shift);
+                _clipboard = null;
+                await _refreshShifts();
+              },
+              onUpdateShift: (oldShift, newStart, newEnd) async {
+                if (newStart == newEnd) {
+                  // Delete with undo support
+                  if (oldShift.id != null) {
+                    final shiftToDelete = Shift(
+                      id: oldShift.id,
+                      employeeId: oldShift.employeeId,
+                      startTime: oldShift.start,
+                      endTime: oldShift.end,
+                      label: oldShift.text,
+                    );
+                    await _deleteShiftWithUndo(shiftToDelete);
+                  }
+                } else {
+                  // Check for conflicts (exclude current shift if editing)
+                  final hasConflict = await _shiftDao.hasConflict(
+                    oldShift.employeeId,
+                    newStart,
+                    newEnd,
+                    excludeId: oldShift.id,
+                  );
+                  if (hasConflict && mounted) {
+                    final proceed = await _showConflictWarning(
+                      context,
+                      oldShift.employeeId,
+                      newStart,
+                      newEnd,
+                      excludeId: oldShift.id,
+                    );
+                    if (!proceed) return;
+                  }
+
+                  // Update or add with undo support
+                  if (oldShift.id != null) {
+                    // Update existing
+                    final oldShiftModel = Shift(
+                      id: oldShift.id,
+                      employeeId: oldShift.employeeId,
+                      startTime: oldShift.start,
+                      endTime: oldShift.end,
+                      label: oldShift.text,
+                    );
+                    final updated = Shift(
+                      id: oldShift.id,
+                      employeeId: oldShift.employeeId,
+                      startTime: newStart,
+                      endTime: newEnd,
+                      label: oldShift.text,
+                    );
+                    await _updateShiftWithUndo(oldShiftModel, updated);
+                  } else {
+                    // Insert new
+                    final newShift = Shift(
+                      employeeId: oldShift.employeeId,
+                      startTime: newStart,
+                      endTime: newEnd,
+                      label: oldShift.text,
+                    );
+                    await _insertShiftWithUndo(newShift);
+                  }
+                }
+                await _refreshShifts();
+              },
+              onMoveShift: (shift, newDay, newEmployeeId) async {
+                // Move shift to a new day and/or employee
+                // Calculate the shift duration to preserve time
+                final duration = shift.end.difference(shift.start);
+                final newStart = DateTime(
+                  newDay.year,
+                  newDay.month,
+                  newDay.day,
+                  shift.start.hour,
+                  shift.start.minute,
+                );
+                final newEnd = newStart.add(duration);
+
+                // Check for conflicts
+                final hasConflict = await _shiftDao.hasConflict(
+                  newEmployeeId,
+                  newStart,
+                  newEnd,
+                  excludeId: shift.id,
+                );
+                if (hasConflict && mounted) {
+                  final proceed = await _showConflictWarning(
+                    context,
+                    newEmployeeId,
+                    newStart,
+                    newEnd,
+                    excludeId: shift.id,
+                  );
+                  if (!proceed) return;
+                }
+
+                if (shift.id != null) {
+                  // Update existing shift with new employee and times with undo support
+                  final oldShiftModel = Shift(
+                    id: shift.id,
+                    employeeId: shift.employeeId,
+                    startTime: shift.start,
+                    endTime: shift.end,
+                    label: shift.text,
+                  );
+                  final updated = Shift(
+                    id: shift.id,
+                    employeeId: newEmployeeId,
+                    startTime: newStart,
+                    endTime: newEnd,
+                    label: shift.text,
+                  );
+                  await _moveShiftWithUndo(oldShiftModel, updated);
+                } else {
+                  // Insert as new (shouldn't happen for drag, but handle it)
+                  final newShift = Shift(
+                    employeeId: newEmployeeId,
+                    startTime: newStart,
+                    endTime: newEnd,
+                    label: shift.text,
+                  );
+                  await _insertShiftWithUndo(newShift);
+                }
+                await _refreshShifts();
+              },
             ),
           ),
         ],
@@ -1139,9 +1291,14 @@ class _ScheduleViewState extends State<ScheduleView> {
       notes: _notes,
       jobCodeSettings: _jobCodeSettings,
       clipboardAvailable: _clipboard != null,
+      shiftRunnerRefreshKey: _shiftRunnerRefreshKey,
       onCopyShift: (s) {
         setState(() {
-          _clipboard = {'start': TimeOfDay(hour: s.start.hour, minute: s.start.minute), 'duration': s.end.difference(s.start), 'text': s.text};
+          _clipboard = {
+            'start': TimeOfDay(hour: s.start.hour, minute: s.start.minute),
+            'duration': s.end.difference(s.start),
+            'text': s.text,
+          };
         });
       },
       onSaveNote: (day, note) async {
@@ -1157,16 +1314,28 @@ class _ScheduleViewState extends State<ScheduleView> {
         if (_clipboard == null) return;
         final tod = _clipboard!['start'] as TimeOfDay;
         final dur = _clipboard!['duration'] as Duration;
-        DateTime start = DateTime(day.year, day.month, day.day, tod.hour, tod.minute);
-        if (tod.hour == 0 || tod.hour == 1) start = start.add(const Duration(days: 1));
+        DateTime start = DateTime(
+          day.year,
+          day.month,
+          day.day,
+          tod.hour,
+          tod.minute,
+        );
+        if (tod.hour == 0 || tod.hour == 1)
+          start = start.add(const Duration(days: 1));
         final end = start.add(dur);
-        
+
         final hasConflict = await _shiftDao.hasConflict(employeeId, start, end);
         if (hasConflict && mounted) {
-          final proceed = await _showConflictWarning(context, employeeId, start, end);
+          final proceed = await _showConflictWarning(
+            context,
+            employeeId,
+            start,
+            end,
+          );
           if (!proceed) return;
         }
-        
+
         final shift = Shift(
           employeeId: employeeId,
           startTime: start,
@@ -1222,15 +1391,32 @@ class _ScheduleViewState extends State<ScheduleView> {
       },
       onMoveShift: (shift, newDay, newEmployeeId) async {
         final duration = shift.end.difference(shift.start);
-        final newStart = DateTime(newDay.year, newDay.month, newDay.day, shift.start.hour, shift.start.minute);
+        final newStart = DateTime(
+          newDay.year,
+          newDay.month,
+          newDay.day,
+          shift.start.hour,
+          shift.start.minute,
+        );
         final newEnd = newStart.add(duration);
-        
-        final hasConflict = await _shiftDao.hasConflict(newEmployeeId, newStart, newEnd, excludeId: shift.id);
+
+        final hasConflict = await _shiftDao.hasConflict(
+          newEmployeeId,
+          newStart,
+          newEnd,
+          excludeId: shift.id,
+        );
         if (hasConflict && mounted) {
-          final proceed = await _showConflictWarning(context, newEmployeeId, newStart, newEnd, excludeId: shift.id);
+          final proceed = await _showConflictWarning(
+            context,
+            newEmployeeId,
+            newStart,
+            newEnd,
+            excludeId: shift.id,
+          );
           if (!proceed) return;
         }
-        
+
         if (shift.id != null) {
           final oldShiftModel = Shift(
             id: shift.id,
@@ -1263,8 +1449,18 @@ class _ScheduleViewState extends State<ScheduleView> {
 
   String _monthName(int month) {
     const names = [
-      'January','February','March','April','May','June',
-      'July','August','September','October','November','December'
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
     ];
     return names[month - 1];
   }
@@ -1276,18 +1472,23 @@ class _ScheduleViewState extends State<ScheduleView> {
 
   /// Show a warning dialog when there's a scheduling conflict
   Future<bool> _showConflictWarning(
-    BuildContext context, 
-    int employeeId, 
-    DateTime start, 
-    DateTime end, 
-    {int? excludeId}
-  ) async {
-    final conflicts = await _shiftDao.getConflicts(employeeId, start, end, excludeId: excludeId);
+    BuildContext context,
+    int employeeId,
+    DateTime start,
+    DateTime end, {
+    int? excludeId,
+  }) async {
+    final conflicts = await _shiftDao.getConflicts(
+      employeeId,
+      start,
+      end,
+      excludeId: excludeId,
+    );
     final employee = _employees.firstWhere(
-      (e) => e.id == employeeId, 
+      (e) => e.id == employeeId,
       orElse: () => Employee(id: employeeId, name: 'Unknown', jobCode: ''),
     );
-    
+
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) {
@@ -1323,12 +1524,19 @@ class _ScheduleViewState extends State<ScheduleView> {
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     const Divider(),
-                    const Text('Conflicting shift(s):', style: TextStyle(fontWeight: FontWeight.w500)),
+                    const Text(
+                      'Conflicting shift(s):',
+                      style: TextStyle(fontWeight: FontWeight.w500),
+                    ),
                     const SizedBox(height: 4),
-                    ...conflicts.map((c) => Padding(
-                      padding: const EdgeInsets.only(left: 8, top: 2),
-                      child: Text('• ${_formatTimeRange(c.startTime, c.endTime)}'),
-                    )),
+                    ...conflicts.map(
+                      (c) => Padding(
+                        padding: const EdgeInsets.only(left: 8, top: 2),
+                        child: Text(
+                          '• ${_formatTimeRange(c.startTime, c.endTime)}',
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -1363,10 +1571,10 @@ class _ScheduleViewState extends State<ScheduleView> {
       final mm = dt.minute.toString().padLeft(2, '0');
       return '$h:$mm $suffix';
     }
+
     final dateStr = '${start.month}/${start.day}/${start.year}';
     return '$dateStr ${formatTime(start)} - ${formatTime(end)}';
   }
-
 }
 
 // ------------------------------------------------------------
@@ -1377,12 +1585,19 @@ class DailyScheduleView extends StatelessWidget {
   final List<Employee> employees;
   final List<ShiftPlaceholder> shifts;
 
-  const DailyScheduleView({super.key, required this.date, required this.employees, this.shifts = const []});
+  const DailyScheduleView({
+    super.key,
+    required this.date,
+    required this.employees,
+    this.shifts = const [],
+  });
 
   List<ShiftPlaceholder> _shiftsForDate() {
     final d = DateTime(date.year, date.month, date.day);
     final list = shifts.where((s) {
-      return s.start.year == d.year && s.start.month == d.month && s.start.day == d.day;
+      return s.start.year == d.year &&
+          s.start.month == d.month &&
+          s.start.day == d.day;
     }).toList();
     list.sort((a, b) => a.start.compareTo(b.start)); // earlier first
     return list;
@@ -1393,7 +1608,9 @@ class DailyScheduleView extends StatelessWidget {
     final items = _shiftsForDate();
 
     if (items.isEmpty) {
-      return Center(child: Text('No shifts for ${date.month}/${date.day}/${date.year}'));
+      return Center(
+        child: Text('No shifts for ${date.month}/${date.day}/${date.year}'),
+      );
     }
 
     return ListView.separated(
@@ -1402,13 +1619,25 @@ class DailyScheduleView extends StatelessWidget {
       separatorBuilder: (context, idx) => const Divider(height: 12),
       itemBuilder: (context, idx) {
         final s = items[idx];
-        final emp = employees.firstWhere((e) => e.id == s.employeeId, orElse: () => Employee(id: s.employeeId, name: 'Employee', jobCode: ''));
-        final time = _formatTimeOfDay(TimeOfDay(hour: s.start.hour, minute: s.start.minute));
+        final emp = employees.firstWhere(
+          (e) => e.id == s.employeeId,
+          orElse: () =>
+              Employee(id: s.employeeId, name: 'Employee', jobCode: ''),
+        );
+        final time = _formatTimeOfDay(
+          TimeOfDay(hour: s.start.hour, minute: s.start.minute),
+        );
         return ListTile(
-          key: ValueKey('daily-shift-${s.employeeId}-${s.start.toIso8601String()}'),
-          leading: CircleAvatar(child: Text(emp.name.isNotEmpty ? emp.name[0] : '?')),
+          key: ValueKey(
+            'daily-shift-${s.employeeId}-${s.start.toIso8601String()}',
+          ),
+          leading: CircleAvatar(
+            child: Text(emp.name.isNotEmpty ? emp.name[0] : '?'),
+          ),
           title: Text(emp.name),
-          subtitle: Text('$time — ${_formatTimeOfDay(TimeOfDay(hour: s.end.hour, minute: s.end.minute))}'),
+          subtitle: Text(
+            '$time — ${_formatTimeOfDay(TimeOfDay(hour: s.end.hour, minute: s.end.minute))}',
+          ),
           trailing: Text(s.text),
         );
       },
@@ -1432,13 +1661,24 @@ class WeeklyScheduleView extends StatefulWidget {
   final List<ShiftPlaceholder> shifts;
   final Map<DateTime, ScheduleNote> notes;
   final List<JobCodeSettings> jobCodeSettings;
-  final void Function(ShiftPlaceholder oldShift, DateTime newStart, DateTime newEnd)? onUpdateShift;
+  final void Function(
+    ShiftPlaceholder oldShift,
+    DateTime newStart,
+    DateTime newEnd,
+  )?
+  onUpdateShift;
   final void Function(ShiftPlaceholder shift)? onCopyShift;
   final void Function(DateTime day, int employeeId)? onPasteTarget;
-  final void Function(ShiftPlaceholder shift, DateTime newDay, int newEmployeeId)? onMoveShift;
+  final void Function(
+    ShiftPlaceholder shift,
+    DateTime newDay,
+    int newEmployeeId,
+  )?
+  onMoveShift;
   final void Function(DateTime day, String note)? onSaveNote;
   final void Function(DateTime day)? onDeleteNote;
   final bool clipboardAvailable;
+  final int shiftRunnerRefreshKey;
 
   const WeeklyScheduleView({
     super.key,
@@ -1454,6 +1694,7 @@ class WeeklyScheduleView extends StatefulWidget {
     this.onSaveNote,
     this.onDeleteNote,
     this.clipboardAvailable = false,
+    this.shiftRunnerRefreshKey = 0,
   });
 
   @override
@@ -1488,7 +1729,8 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
   @override
   void didUpdateWidget(WeeklyScheduleView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.date != widget.date) {
+    if (oldWidget.date != widget.date ||
+        oldWidget.shiftRunnerRefreshKey != widget.shiftRunnerRefreshKey) {
       _loadShiftRunnerData();
     }
   }
@@ -1508,7 +1750,11 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
 
   DateTime _normalizeToWeekStart(DateTime date) {
     final daysSinceSunday = date.weekday % 7;
-    return DateTime(date.year, date.month, date.day).subtract(Duration(days: daysSinceSunday));
+    return DateTime(
+      date.year,
+      date.month,
+      date.day,
+    ).subtract(Duration(days: daysSinceSunday));
   }
 
   @override
@@ -1521,12 +1767,13 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
   int _calculateWeeklyHours(int employeeId, List<DateTime> weekDays) {
     int totalMinutes = 0;
     for (final day in weekDays) {
-      final shiftsForDay = widget.shifts.where((s) =>
-        s.employeeId == employeeId &&
-        s.start.year == day.year &&
-        s.start.month == day.month &&
-        s.start.day == day.day &&
-        !['VAC', 'PTO', 'REQ OFF'].contains(s.text.toUpperCase())
+      final shiftsForDay = widget.shifts.where(
+        (s) =>
+            s.employeeId == employeeId &&
+            s.start.year == day.year &&
+            s.start.month == day.month &&
+            s.start.day == day.day &&
+            !['VAC', 'PTO', 'REQ OFF', 'OFF'].contains(s.text.toUpperCase()),
       );
       for (final shift in shiftsForDay) {
         totalMinutes += shift.end.difference(shift.start).inMinutes;
@@ -1563,71 +1810,240 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     int selEnd = 16;
     ShiftTemplate? selectedTemplate;
     String? selectedRunnerShift; // Track which shift runner button is selected
-    
+
     // Get the employee name for runner assignment
     final employee = widget.employees.firstWhere(
       (e) => e.id == employeeId,
       orElse: () => widget.employees.first,
     );
 
-    return StatefulBuilder(builder: (context, setDialogState) {
-      return AlertDialog(
-        title: const Text('Add Shift'),
-        content: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Templates column (left)
-            if (templates.isNotEmpty)
+    return StatefulBuilder(
+      builder: (context, setDialogState) {
+        return AlertDialog(
+          title: const Text('Add Shift'),
+          content: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Templates column (left)
+              if (templates.isNotEmpty)
+                Container(
+                  width: 140,
+                  padding: const EdgeInsets.only(right: 16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        'Templates:',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      ...templates.map((template) {
+                        final startParts = template.startTime.split(':');
+                        final startHour = int.parse(startParts[0]);
+                        final startMin = int.parse(startParts[1]);
+                        final endParts = template.endTime.split(':');
+                        final endHour = int.parse(endParts[0]);
+                        final endMin = int.parse(endParts[1]);
+
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              backgroundColor: selectedTemplate == template
+                                  ? Colors.blue.withOpacity(0.1)
+                                  : null,
+                              side: BorderSide(
+                                color: selectedTemplate == template
+                                    ? Colors.blue
+                                    : Colors.grey,
+                                width: selectedTemplate == template ? 2 : 1,
+                              ),
+                            ),
+                            onPressed: () {
+                              int startIdx = times.indexWhere(
+                                (t) =>
+                                    t.hour == startHour && t.minute == startMin,
+                              );
+                              if (startIdx == -1) startIdx = 0;
+
+                              int endIdx = times.indexWhere(
+                                (t) => t.hour == endHour && t.minute == endMin,
+                              );
+                              if (endIdx == -1) endIdx = times.length - 1;
+
+                              setDialogState(() {
+                                selectedTemplate = template;
+                                selStart = startIdx;
+                                selEnd = endIdx;
+                              });
+                            },
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  template.templateName,
+                                  style: const TextStyle(fontSize: 11),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  '${template.startTime}-${template.endTime}',
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.grey,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ],
+                  ),
+                ),
+              // Time selection column (center)
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: bannerColor.withOpacity(0.2),
+                        border: Border.all(color: bannerColor),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            type == 'time-off'
+                                ? Icons.event_busy
+                                : (isAvailable
+                                      ? Icons.check_circle
+                                      : Icons.warning),
+                            color: bannerColor,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              reason,
+                              style: TextStyle(
+                                color: bannerColor.withOpacity(0.9),
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButton<int>(
+                      value: selStart,
+                      isExpanded: true,
+                      items: List.generate(
+                        times.length,
+                        (i) => DropdownMenuItem(
+                          value: i,
+                          child: Text(_formatTimeOfDay(times[i])),
+                        ),
+                      ),
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setDialogState(() {
+                          selStart = v;
+                          if (selEnd < selStart) selEnd = selStart;
+                          selectedTemplate = null;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    DropdownButton<int>(
+                      value: selEnd,
+                      isExpanded: true,
+                      items: List.generate(
+                        times.length,
+                        (i) => DropdownMenuItem(
+                          value: i,
+                          child: Text(_formatTimeOfDay(times[i])),
+                        ),
+                      ),
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setDialogState(() {
+                          selEnd = v;
+                          selectedTemplate = null;
+                        });
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              // Shift Runner column (right)
               Container(
-                width: 140,
-                padding: const EdgeInsets.only(right: 16),
+                width: 100,
+                padding: const EdgeInsets.only(left: 16),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Text('Templates:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                    const Text(
+                      'Shift Runner:',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
                     const SizedBox(height: 8),
-                    ...templates.map((template) {
-                      final startParts = template.startTime.split(':');
-                      final startHour = int.parse(startParts[0]);
-                      final startMin = int.parse(startParts[1]);
-                      final endParts = template.endTime.split(':');
-                      final endHour = int.parse(endParts[0]);
-                      final endMin = int.parse(endParts[1]);
-
+                    ...ShiftRunner.shiftOrder.map((shiftType) {
+                      final isSelected = selectedRunnerShift == shiftType;
                       return Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: OutlinedButton(
-                          style: OutlinedButton.styleFrom(
-                            backgroundColor: selectedTemplate == template ? Colors.blue.withOpacity(0.1) : null,
-                            side: BorderSide(
-                              color: selectedTemplate == template ? Colors.blue : Colors.grey,
-                              width: selectedTemplate == template ? 2 : 1,
-                            ),
-                          ),
-                          onPressed: () {
-                            int startIdx = times.indexWhere((t) => t.hour == startHour && t.minute == startMin);
-                            if (startIdx == -1) startIdx = 0;
-                            
-                            int endIdx = times.indexWhere((t) => t.hour == endHour && t.minute == endMin);
-                            if (endIdx == -1) endIdx = times.length - 1;
-
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: InkWell(
+                          onTap: () {
                             setDialogState(() {
-                              selectedTemplate = template;
-                              selStart = startIdx;
-                              selEnd = endIdx;
+                              if (selectedRunnerShift == shiftType) {
+                                selectedRunnerShift =
+                                    null; // Deselect if already selected
+                              } else {
+                                selectedRunnerShift = shiftType;
+                              }
                             });
                           },
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(template.templateName, style: const TextStyle(fontSize: 11)),
-                              const SizedBox(height: 2),
-                              Text(
-                                '${template.startTime}-${template.endTime}',
-                                style: const TextStyle(fontSize: 10, color: Colors.grey),
+                          borderRadius: BorderRadius.circular(4),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? _getShiftTypeColor(
+                                      shiftType,
+                                    ).withOpacity(0.3)
+                                  : _getShiftTypeColor(
+                                      shiftType,
+                                    ).withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(
+                                color: _getShiftTypeColor(shiftType),
+                                width: isSelected ? 2 : 1,
                               ),
-                            ],
+                            ),
+                            child: Text(
+                              ShiftRunner.getLabelForType(shiftType),
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: isSelected
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                                color: _getShiftTypeColor(shiftType),
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
                           ),
                         ),
                       );
@@ -1635,151 +2051,51 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
                   ],
                 ),
               ),
-            // Time selection column (center)
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: bannerColor.withOpacity(0.2),
-                      border: Border.all(color: bannerColor),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          type == 'time-off' ? Icons.event_busy : (isAvailable ? Icons.check_circle : Icons.warning),
-                          color: bannerColor,
-                          size: 20,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            reason,
-                            style: TextStyle(color: bannerColor.withOpacity(0.9), fontSize: 12),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  DropdownButton<int>(
-                    value: selStart,
-                    isExpanded: true,
-                    items: List.generate(times.length, (i) => DropdownMenuItem(value: i, child: Text(_formatTimeOfDay(times[i])))),
-                    onChanged: (v) {
-                      if (v == null) return;
-                      setDialogState(() {
-                        selStart = v;
-                        if (selEnd < selStart) selEnd = selStart;
-                        selectedTemplate = null;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  DropdownButton<int>(
-                    value: selEnd,
-                    isExpanded: true,
-                    items: List.generate(times.length, (i) => DropdownMenuItem(value: i, child: Text(_formatTimeOfDay(times[i])))),
-                    onChanged: (v) {
-                      if (v == null) return;
-                      setDialogState(() {
-                        selEnd = v;
-                        selectedTemplate = null;
-                      });
-                    },
-                  ),
-                ],
-              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
             ),
-            // Shift Runner column (right)
-            Container(
-              width: 100,
-              padding: const EdgeInsets.only(left: 16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text('Shift Runner:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                  const SizedBox(height: 8),
-                  ...ShiftRunner.shiftOrder.map((shiftType) {
-                    final isSelected = selectedRunnerShift == shiftType;
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: InkWell(
-                        onTap: () {
-                          setDialogState(() {
-                            if (selectedRunnerShift == shiftType) {
-                              selectedRunnerShift = null; // Deselect if already selected
-                            } else {
-                              selectedRunnerShift = shiftType;
-                            }
-                          });
-                        },
-                        borderRadius: BorderRadius.circular(4),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: isSelected 
-                                ? _getShiftTypeColor(shiftType).withOpacity(0.3)
-                                : _getShiftTypeColor(shiftType).withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(
-                              color: _getShiftTypeColor(shiftType),
-                              width: isSelected ? 2 : 1,
-                            ),
-                          ),
-                          child: Text(
-                            ShiftRunner.getLabelForType(shiftType),
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                              color: _getShiftTypeColor(shiftType),
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ],
-              ),
+            TextButton(
+              onPressed: () async {
+                final newStart = _timeOfDayToDateTime(day, times[selStart]);
+                final newEnd = _timeOfDayToDateTime(day, times[selEnd]);
+
+                // Save shift runner if a shift was selected
+                if (selectedRunnerShift != null) {
+                  await _shiftRunnerDao.upsert(
+                    ShiftRunner(
+                      date: day,
+                      shiftType: selectedRunnerShift!,
+                      runnerName: employee.name,
+                    ),
+                  );
+                }
+
+                if (!newEnd.isAfter(newStart)) {
+                  Navigator.pop(context, [
+                    newStart,
+                    newStart.add(const Duration(hours: 1)),
+                  ]);
+                } else {
+                  Navigator.pop(context, [newStart, newEnd]);
+                }
+              },
+              child: const Text('Save'),
             ),
           ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () async {
-              final newStart = _timeOfDayToDateTime(day, times[selStart]);
-              final newEnd = _timeOfDayToDateTime(day, times[selEnd]);
-              
-              // Save shift runner if a shift was selected
-              if (selectedRunnerShift != null) {
-                await _shiftRunnerDao.upsert(ShiftRunner(
-                  date: day,
-                  shiftType: selectedRunnerShift!,
-                  runnerName: employee.name,
-                ));
-              }
-              
-              if (!newEnd.isAfter(newStart)) {
-                Navigator.pop(context, [newStart, newStart.add(const Duration(hours: 1))]);
-              } else {
-                Navigator.pop(context, [newStart, newEnd]);
-              }
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      );
-    });
+        );
+      },
+    );
   }
 
   Color _getShiftTypeColor(String shiftType) {
-    final hex = _shiftRunnerColors[shiftType] ?? ShiftRunnerColor.defaultColors[shiftType] ?? '#808080';
+    final hex =
+        _shiftRunnerColors[shiftType] ??
+        ShiftRunnerColor.defaultColors[shiftType] ??
+        '#808080';
     final cleanHex = hex.replaceFirst('#', '');
     return Color(int.parse('FF$cleanHex', radix: 16));
   }
@@ -1787,7 +2103,8 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
   // Get shift runner for a given day and shift type
   ShiftRunner? _getShiftRunner(DateTime day, String shiftType) {
     return _shiftRunners.cast<ShiftRunner?>().firstWhere(
-      (r) => r != null &&
+      (r) =>
+          r != null &&
           r.date.year == day.year &&
           r.date.month == day.month &&
           r.date.day == day.day &&
@@ -1817,32 +2134,46 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
       autofocus: true,
       child: Shortcuts(
         shortcuts: <LogicalKeySet, Intent>{
-          LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyC): const CopyIntent(),
-          LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyV): const PasteIntent(),
+          LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyC):
+              const CopyIntent(),
+          LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyV):
+              const PasteIntent(),
         },
         child: Actions(
           actions: <Type, Action<Intent>>{
-            CopyIntent: CallbackAction<CopyIntent>(onInvoke: (intent) {
-              if (_selectedShift != null && widget.onCopyShift != null) {
-                widget.onCopyShift!(_selectedShift!);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Shift copied'), duration: Duration(seconds: 1)),
-                );
-              }
-              return null;
-            }),
-            PasteIntent: CallbackAction<PasteIntent>(onInvoke: (intent) {
-              if (widget.onPasteTarget != null && _selectedTargetDay != null && _selectedTargetEmployeeId != null) {
-                if (widget.clipboardAvailable) {
-                  widget.onPasteTarget!(_selectedTargetDay!, _selectedTargetEmployeeId!);
-                } else {
+            CopyIntent: CallbackAction<CopyIntent>(
+              onInvoke: (intent) {
+                if (_selectedShift != null && widget.onCopyShift != null) {
+                  widget.onCopyShift!(_selectedShift!);
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('No shift copied to paste')),
+                    const SnackBar(
+                      content: Text('Shift copied'),
+                      duration: Duration(seconds: 1),
+                    ),
                   );
                 }
-              }
-              return null;
-            })
+                return null;
+              },
+            ),
+            PasteIntent: CallbackAction<PasteIntent>(
+              onInvoke: (intent) {
+                if (widget.onPasteTarget != null &&
+                    _selectedTargetDay != null &&
+                    _selectedTargetEmployeeId != null) {
+                  if (widget.clipboardAvailable) {
+                    widget.onPasteTarget!(
+                      _selectedTargetDay!,
+                      _selectedTargetEmployeeId!,
+                    );
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('No shift copied to paste')),
+                    );
+                  }
+                }
+                return null;
+              },
+            ),
           },
           child: _buildContent(),
         ),
@@ -1866,10 +2197,10 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
             final dateKey = DateTime(d.year, d.month, d.day);
             final hasNote = widget.notes.containsKey(dateKey);
             final note = widget.notes[dateKey];
-            
+
             return SizedBox(
-              width: cellWidth, 
-              height: 40, 
+              width: cellWidth,
+              height: 40,
               child: InkWell(
                 onTap: () => _showNoteDialog(context, d, note?.note),
                 child: Column(
@@ -1879,7 +2210,11 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
                     if (hasNote)
                       Tooltip(
                         message: note?.note ?? '',
-                        child: Icon(Icons.sticky_note_2, size: 14, color: Colors.amber.shade700),
+                        child: Icon(
+                          Icons.sticky_note_2,
+                          size: 14,
+                          color: Colors.amber.shade700,
+                        ),
                       ),
                   ],
                 ),
@@ -1890,10 +2225,12 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
 
         return Column(
           children: [
-            Row(children: [
-              SizedBox(width: employeeColumnWidth, height: 40), 
-              Expanded(child: dayHeaders)
-            ]),
+            Row(
+              children: [
+                SizedBox(width: employeeColumnWidth, height: 40),
+                Expanded(child: dayHeaders),
+              ],
+            ),
             Expanded(
               child: Row(
                 children: [
@@ -1911,41 +2248,61 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
                             child: Column(
                               children: widget.employees.map((e) {
                                 // Calculate weekly hours for this employee
-                                final weeklyHours = _calculateWeeklyHours(e.id!, days);
+                                final weeklyHours = _calculateWeeklyHours(
+                                  e.id!,
+                                  days,
+                                );
                                 final maxHours = _getMaxHoursForEmployee(e);
                                 final isOverLimit = weeklyHours > maxHours;
-                                
+
                                 return SizedBox(
                                   height: 60,
                                   child: Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                    ),
                                     child: Center(
                                       child: Column(
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        crossAxisAlignment: CrossAxisAlignment.center,
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.center,
                                         children: [
                                           Text(
                                             e.name,
                                             overflow: TextOverflow.ellipsis,
                                             textAlign: TextAlign.center,
-                                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                            style: const TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.bold,
+                                            ),
                                           ),
                                           Row(
-                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
                                             children: [
                                               Text(
                                                 '${weeklyHours}h',
                                                 style: TextStyle(
                                                   fontSize: 11,
-                                                  color: isOverLimit ? Colors.red : Colors.grey,
-                                                  fontWeight: isOverLimit ? FontWeight.bold : FontWeight.normal,
+                                                  color: isOverLimit
+                                                      ? Colors.red
+                                                      : Colors.grey,
+                                                  fontWeight: isOverLimit
+                                                      ? FontWeight.bold
+                                                      : FontWeight.normal,
                                                 ),
                                               ),
                                               if (isOverLimit) ...[
                                                 const SizedBox(width: 4),
                                                 Tooltip(
-                                                  message: 'Over max ${maxHours}h/week limit',
-                                                  child: const Icon(Icons.warning, size: 14, color: Colors.red),
+                                                  message:
+                                                      'Over max ${maxHours}h/week limit',
+                                                  child: const Icon(
+                                                    Icons.warning,
+                                                    size: 14,
+                                                    color: Colors.red,
+                                                  ),
                                                 ),
                                               ],
                                             ],
@@ -1964,275 +2321,393 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
                             return SizedBox(
                               width: cellWidth,
                               child: Column(
-                              children: widget.employees.map((e) {
-                                final shiftsForCell = widget.shifts.where((s) => 
-                                  s.employeeId == e.id && 
-                                  s.start.year == d.year && 
-                                  s.start.month == d.month && 
-                                  s.start.day == d.day
-                                ).toList();
-                                
-                                final has = shiftsForCell.isNotEmpty;
-                                
-                                if (!has) {
-                                  final isTargetSelected = _selectedTargetDay != null && 
-                                      _selectedTargetDay == d && 
-                                      _selectedTargetEmployeeId == e.id;
-                                  final clipboardAvailable = widget.clipboardAvailable;
-                                  final isDragHover = _dragHoverDay != null &&
-                                      _dragHoverDay == d &&
-                                      _dragHoverEmployeeId == e.id;
+                                children: widget.employees.map((e) {
+                                  final shiftsForCell = widget.shifts
+                                      .where(
+                                        (s) =>
+                                            s.employeeId == e.id &&
+                                            s.start.year == d.year &&
+                                            s.start.month == d.month &&
+                                            s.start.day == d.day,
+                                      )
+                                      .toList();
 
-                                  return DragTarget<ShiftPlaceholder>(
-                                    onWillAcceptWithDetails: (details) {
-                                      // Accept drops from other cells (not the same cell)
-                                      final draggedShift = details.data;
-                                      final isSameCell = draggedShift.employeeId == e.id &&
-                                          draggedShift.start.year == d.year &&
-                                          draggedShift.start.month == d.month &&
-                                          draggedShift.start.day == d.day;
-                                      return !isSameCell;
-                                    },
-                                    onAcceptWithDetails: (details) {
-                                      setState(() {
-                                        _dragHoverDay = null;
-                                        _dragHoverEmployeeId = null;
-                                      });
-                                      if (widget.onMoveShift != null) {
-                                        widget.onMoveShift!(details.data, d, e.id!);
-                                      }
-                                    },
-                                    onMove: (details) {
-                                      setState(() {
-                                        _dragHoverDay = d;
-                                        _dragHoverEmployeeId = e.id;
-                                      });
-                                    },
-                                    onLeave: (data) {
-                                      setState(() {
-                                        _dragHoverDay = null;
-                                        _dragHoverEmployeeId = null;
-                                      });
-                                    },
-                                    builder: (context, candidateData, rejectedData) {
-                                      return GestureDetector(
-                                        onTap: () {
-                                          if (widget.clipboardAvailable && widget.onPasteTarget != null) {
-                                            // Paste if clipboard has data
-                                            widget.onPasteTarget!(d, e.id!);
-                                          } else {
-                                            // Otherwise just select the cell
-                                            setState(() {
-                                              _selectedTargetDay = d;
-                                              _selectedTargetEmployeeId = e.id;
-                                              _selectedShift = null;
-                                            });
-                                          }
-                                        },
-                                        onDoubleTap: () async {
-                                          // Create a new shift on double-click with availability check
-                                          await _showAddShiftDialogWithAvailability(context, d, e.id!);
-                                        },
-                                        onLongPress: () {
-                                          if (widget.clipboardAvailable && widget.onPasteTarget != null) {
-                                            widget.onPasteTarget!(d, e.id!);
-                                          } else {
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              const SnackBar(content: Text('No shift copied to paste')),
-                                            );
-                                          }
-                                        },
-                                        onSecondaryTapDown: (details) {
-                                          _showEmptyCellContextMenu(context, d, e.id!, position: details.globalPosition);
-                                        },
-                                        child: FutureBuilder<Map<String, dynamic>>(
-                                          future: _checkAvailability(e.id!, d),
-                                          builder: (context, snapshot) {
-                                            bool showDash = false;
-                                            if (snapshot.hasData) {
-                                              final type = snapshot.data!['type'] as String;
-                                              final available = snapshot.data!['available'] as bool;
-                                              if (type == 'time-off' || !available) {
-                                                showDash = true;
-                                              }
+                                  final has = shiftsForCell.isNotEmpty;
+
+                                  if (!has) {
+                                    final isTargetSelected =
+                                        _selectedTargetDay != null &&
+                                        _selectedTargetDay == d &&
+                                        _selectedTargetEmployeeId == e.id;
+                                    final clipboardAvailable =
+                                        widget.clipboardAvailable;
+                                    final isDragHover =
+                                        _dragHoverDay != null &&
+                                        _dragHoverDay == d &&
+                                        _dragHoverEmployeeId == e.id;
+
+                                    return DragTarget<ShiftPlaceholder>(
+                                      onWillAcceptWithDetails: (details) {
+                                        // Accept drops from other cells (not the same cell)
+                                        final draggedShift = details.data;
+                                        final isSameCell =
+                                            draggedShift.employeeId == e.id &&
+                                            draggedShift.start.year == d.year &&
+                                            draggedShift.start.month ==
+                                                d.month &&
+                                            draggedShift.start.day == d.day;
+                                        return !isSameCell;
+                                      },
+                                      onAcceptWithDetails: (details) {
+                                        setState(() {
+                                          _dragHoverDay = null;
+                                          _dragHoverEmployeeId = null;
+                                        });
+                                        if (widget.onMoveShift != null) {
+                                          widget.onMoveShift!(
+                                            details.data,
+                                            d,
+                                            e.id!,
+                                          );
+                                        }
+                                      },
+                                      onMove: (details) {
+                                        setState(() {
+                                          _dragHoverDay = d;
+                                          _dragHoverEmployeeId = e.id;
+                                        });
+                                      },
+                                      onLeave: (data) {
+                                        setState(() {
+                                          _dragHoverDay = null;
+                                          _dragHoverEmployeeId = null;
+                                        });
+                                      },
+                                      builder: (context, candidateData, rejectedData) {
+                                        return GestureDetector(
+                                          onTap: () {
+                                            if (widget.clipboardAvailable &&
+                                                widget.onPasteTarget != null) {
+                                              // Paste if clipboard has data
+                                              widget.onPasteTarget!(d, e.id!);
+                                            } else {
+                                              // Otherwise just select the cell
+                                              setState(() {
+                                                _selectedTargetDay = d;
+                                                _selectedTargetEmployeeId =
+                                                    e.id;
+                                                _selectedShift = null;
+                                              });
                                             }
-
-                                            return Container(
-                                              height: 60,
-                                              alignment: Alignment.center,
-                                              decoration: BoxDecoration(
-                                                border: Border.all(
-                                                  color: isDragHover
-                                                    ? Colors.green
-                                                    : isTargetSelected 
-                                                      ? Colors.blue 
-                                                      : Theme.of(context).dividerColor,
-                                                  width: isDragHover ? 3 : (isTargetSelected ? 2.5 : 1),
-                                                ),
-                                                color: isDragHover
-                                                  ? Colors.green.withAlpha(30)
-                                                  : isTargetSelected 
-                                                    ? Colors.blue.withAlpha(13) 
-                                                    : null,
-                                              ),
-                                              child: isDragHover
-                                                ? const Icon(Icons.add_circle_outline, color: Colors.green, size: 24)
-                                                : clipboardAvailable && isTargetSelected 
-                                                  ? Icon(Icons.content_paste, color: Colors.blue.withAlpha(128), size: 20)
-                                                  : showDash
-                                                    ? const Text('-', style: TextStyle(fontSize: 24, color: Colors.grey))
-                                                    : null,
+                                          },
+                                          onDoubleTap: () async {
+                                            // Create a new shift on double-click with availability check
+                                            await _showAddShiftDialogWithAvailability(
+                                              context,
+                                              d,
+                                              e.id!,
                                             );
                                           },
-                                        ),
-                                      );
-                                    },
+                                          onLongPress: () {
+                                            if (widget.clipboardAvailable &&
+                                                widget.onPasteTarget != null) {
+                                              widget.onPasteTarget!(d, e.id!);
+                                            } else {
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text(
+                                                    'No shift copied to paste',
+                                                  ),
+                                                ),
+                                              );
+                                            }
+                                          },
+                                          onSecondaryTapDown: (details) {
+                                            _showEmptyCellContextMenu(
+                                              context,
+                                              d,
+                                              e.id!,
+                                              position: details.globalPosition,
+                                            );
+                                          },
+                                          child: FutureBuilder<Map<String, dynamic>>(
+                                            future: _checkAvailability(
+                                              e.id!,
+                                              d,
+                                            ),
+                                            builder: (context, snapshot) {
+                                              bool showDash = false;
+                                              if (snapshot.hasData) {
+                                                final type =
+                                                    snapshot.data!['type']
+                                                        as String;
+                                                final available =
+                                                    snapshot.data!['available']
+                                                        as bool;
+                                                if (type == 'time-off' ||
+                                                    !available) {
+                                                  showDash = true;
+                                                }
+                                              }
+
+                                              return Container(
+                                                height: 60,
+                                                alignment: Alignment.center,
+                                                decoration: BoxDecoration(
+                                                  border: Border.all(
+                                                    color: isDragHover
+                                                        ? Colors.green
+                                                        : isTargetSelected
+                                                        ? Colors.blue
+                                                        : Theme.of(
+                                                            context,
+                                                          ).dividerColor,
+                                                    width: isDragHover
+                                                        ? 3
+                                                        : (isTargetSelected
+                                                              ? 2.5
+                                                              : 1),
+                                                  ),
+                                                  color: isDragHover
+                                                      ? Colors.green.withAlpha(
+                                                          30,
+                                                        )
+                                                      : isTargetSelected
+                                                      ? Colors.blue.withAlpha(
+                                                          13,
+                                                        )
+                                                      : null,
+                                                ),
+                                                child: isDragHover
+                                                    ? const Icon(
+                                                        Icons
+                                                            .add_circle_outline,
+                                                        color: Colors.green,
+                                                        size: 24,
+                                                      )
+                                                    : clipboardAvailable &&
+                                                          isTargetSelected
+                                                    ? Icon(
+                                                        Icons.content_paste,
+                                                        color: Colors.blue
+                                                            .withAlpha(128),
+                                                        size: 20,
+                                                      )
+                                                    : showDash
+                                                    ? const Text(
+                                                        '-',
+                                                        style: TextStyle(
+                                                          fontSize: 24,
+                                                          color: Colors.grey,
+                                                        ),
+                                                      )
+                                                    : null,
+                                              );
+                                            },
+                                          ),
+                                        );
+                                      },
+                                    );
+                                  }
+
+                                  final s = shiftsForCell.first;
+                                  final startLabel = _formatTimeOfDay(
+                                    TimeOfDay(
+                                      hour: s.start.hour,
+                                      minute: s.start.minute,
+                                    ),
                                   );
-                                }
+                                  final endLabel = _formatTimeOfDay(
+                                    TimeOfDay(
+                                      hour: s.end.hour,
+                                      minute: s.end.minute,
+                                    ),
+                                  );
+                                  final isShiftSelected =
+                                      _selectedShift != null &&
+                                      _selectedShift!.employeeId ==
+                                          s.employeeId &&
+                                      _selectedShift!.start == s.start;
 
-                                final s = shiftsForCell.first;
-                                final startLabel = _formatTimeOfDay(TimeOfDay(hour: s.start.hour, minute: s.start.minute));
-                                final endLabel = _formatTimeOfDay(TimeOfDay(hour: s.end.hour, minute: s.end.minute));
-                                final isShiftSelected = _selectedShift != null && 
-                                    _selectedShift!.employeeId == s.employeeId && 
-                                    _selectedShift!.start == s.start;
-
-                                // Wrap in Draggable for drag & drop support
-                                return Draggable<ShiftPlaceholder>(
-                                  data: s,
-                                  feedback: Material(
-                                    elevation: 4,
-                                    borderRadius: BorderRadius.circular(4),
-                                    child: Container(
-                                      width: cellWidth - 4,
-                                      height: 56,
-                                      padding: const EdgeInsets.all(8),
-                                      decoration: BoxDecoration(
-                                        color: Colors.blue.shade100,
-                                        borderRadius: BorderRadius.circular(4),
-                                        border: Border.all(color: Colors.blue, width: 2),
-                                      ),
-                                      child: Center(
-                                        child: Text(
-                                          _isLabelOnly(s.text)
-                                            ? _labelText(s.text)
-                                            : '$startLabel - $endLabel',
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.bold,
+                                  // Wrap in Draggable for drag & drop support
+                                  return Draggable<ShiftPlaceholder>(
+                                    data: s,
+                                    feedback: Material(
+                                      elevation: 4,
+                                      borderRadius: BorderRadius.circular(4),
+                                      child: Container(
+                                        width: cellWidth - 4,
+                                        height: 56,
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: Colors.blue.shade100,
+                                          borderRadius: BorderRadius.circular(
+                                            4,
+                                          ),
+                                          border: Border.all(
                                             color: Colors.blue,
+                                            width: 2,
+                                          ),
+                                        ),
+                                        child: Center(
+                                          child: Text(
+                                            _isLabelOnly(s.text)
+                                                ? _labelText(s.text)
+                                                : '$startLabel - $endLabel',
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.blue,
+                                            ),
                                           ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                  childWhenDragging: Container(
-                                    height: 60,
-                                    alignment: Alignment.center,
-                                    decoration: BoxDecoration(
-                                      border: Border.all(
-                                        color: Colors.grey.shade300,
-                                        width: 1,
-                                        style: BorderStyle.solid,
-                                      ),
-                                      color: Colors.grey.shade200,
-                                    ),
-                                    child: const Text(
-                                      'Moving...',
-                                      style: TextStyle(fontSize: 10, color: Colors.grey),
-                                    ),
-                                  ),
-                                  child: GestureDetector(
-                                    onTap: () {
-                                      setState(() {
-                                        _selectedShift = s;
-                                        _selectedTargetDay = null;
-                                        _selectedTargetEmployeeId = null;
-                                      });
-                                    },
-                                    onDoubleTap: () async {
-                                      final res = await _showEditDialog(context, d, s);
-                                      if (res != null && widget.onUpdateShift != null) {
-                                        widget.onUpdateShift!(s, res[0], res[1]);
-                                      }
-                                    },
-                                    onLongPress: () {
-                                      setState(() {
-                                        _selectedShift = s;
-                                        _selectedTargetDay = null;
-                                        _selectedTargetEmployeeId = null;
-                                      });
-                                      _showShiftContextMenu(context, s);
-                                    },
-                                    onSecondaryTapDown: (details) {
-                                      setState(() {
-                                        _selectedShift = s;
-                                        _selectedTargetDay = null;
-                                        _selectedTargetEmployeeId = null;
-                                      });
-                                      _showShiftContextMenu(context, s, position: details.globalPosition);
-                                    },
-                                    child: Container(
+                                    childWhenDragging: Container(
                                       height: 60,
                                       alignment: Alignment.center,
                                       decoration: BoxDecoration(
                                         border: Border.all(
-                                          color: isShiftSelected ? Colors.blue : Theme.of(context).dividerColor,
-                                          width: isShiftSelected ? 2.5 : 1,
+                                          color: Colors.grey.shade300,
+                                          width: 1,
+                                          style: BorderStyle.solid,
                                         ),
-                                        color: isShiftSelected ? Colors.blue.withAlpha(38) : null,
+                                        color: Colors.grey.shade200,
                                       ),
-                                      child: Builder(
-                                        builder: (context) {
-                                          // Check if this employee is a shift runner for this day
-                                          final runnerShiftType = _getShiftRunnerTypeForEmployee(d, e.id!);
-                                          final runnerColor = runnerShiftType != null 
-                                              ? _getShiftTypeColor(runnerShiftType) 
-                                              : null;
-                                          
-                                          return Stack(
-                                            children: [
-                                              // Shift runner indicator (left border)
-                                              if (runnerColor != null)
-                                                Positioned(
-                                                  left: 0,
-                                                  top: 0,
-                                                  bottom: 0,
-                                                  child: Container(
-                                                    width: 4,
-                                                    color: runnerColor,
-                                                  ),
-                                                ),
-                                              // Main content
-                                              Center(
-                                                child: Text(
-                                                  _isLabelOnly(s.text)
-                                                    ? _labelText(s.text)
-                                                    : '$startLabel - $endLabel',
-                                                  style: TextStyle(
-                                                    fontWeight: isShiftSelected ? FontWeight.bold : FontWeight.normal,
-                                                    color: Theme.of(context).brightness == Brightness.dark 
-                                                      ? Colors.white 
-                                                      : Colors.black87,
-                                                    fontSize: 12,
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          );
-                                        },
+                                      child: const Text(
+                                        'Moving...',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: Colors.grey,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                );
-                              }).toList(),
-                            ),
-                          );
-                        }),
-                      ],
+                                    child: GestureDetector(
+                                      onTap: () {
+                                        setState(() {
+                                          _selectedShift = s;
+                                          _selectedTargetDay = null;
+                                          _selectedTargetEmployeeId = null;
+                                        });
+                                      },
+                                      onDoubleTap: () async {
+                                        final res = await _showEditDialog(
+                                          context,
+                                          d,
+                                          s,
+                                        );
+                                        if (res != null &&
+                                            widget.onUpdateShift != null) {
+                                          widget.onUpdateShift!(
+                                            s,
+                                            res[0],
+                                            res[1],
+                                          );
+                                        }
+                                      },
+                                      onLongPress: () {
+                                        setState(() {
+                                          _selectedShift = s;
+                                          _selectedTargetDay = null;
+                                          _selectedTargetEmployeeId = null;
+                                        });
+                                        _showShiftContextMenu(context, s);
+                                      },
+                                      onSecondaryTapDown: (details) {
+                                        setState(() {
+                                          _selectedShift = s;
+                                          _selectedTargetDay = null;
+                                          _selectedTargetEmployeeId = null;
+                                        });
+                                        _showShiftContextMenu(
+                                          context,
+                                          s,
+                                          position: details.globalPosition,
+                                        );
+                                      },
+                                      child: Container(
+                                        height: 60,
+                                        alignment: Alignment.center,
+                                        decoration: BoxDecoration(
+                                          border: Border.all(
+                                            color: isShiftSelected
+                                                ? Colors.blue
+                                                : Theme.of(
+                                                    context,
+                                                  ).dividerColor,
+                                            width: isShiftSelected ? 2.5 : 1,
+                                          ),
+                                          color: isShiftSelected
+                                              ? Colors.blue.withAlpha(38)
+                                              : null,
+                                        ),
+                                        child: Builder(
+                                          builder: (context) {
+                                            // Check if this employee is a shift runner for this day
+                                            final runnerShiftType =
+                                                _getShiftRunnerTypeForEmployee(
+                                                  d,
+                                                  e.id!,
+                                                );
+                                            final runnerColor =
+                                                runnerShiftType != null
+                                                ? _getShiftTypeColor(
+                                                    runnerShiftType,
+                                                  )
+                                                : null;
+
+                                            return Stack(
+                                              children: [
+                                                // Shift runner indicator (left border)
+                                                if (runnerColor != null)
+                                                  Positioned(
+                                                    left: 0,
+                                                    top: 0,
+                                                    bottom: 0,
+                                                    child: Container(
+                                                      width: 4,
+                                                      color: runnerColor,
+                                                    ),
+                                                  ),
+                                                // Main content
+                                                Center(
+                                                  child: Text(
+                                                    _isLabelOnly(s.text)
+                                                        ? _labelText(s.text)
+                                                        : '$startLabel - $endLabel',
+                                                    style: TextStyle(
+                                                      fontWeight:
+                                                          isShiftSelected
+                                                          ? FontWeight.bold
+                                                          : FontWeight.normal,
+                                                      color:
+                                                          Theme.of(
+                                                                context,
+                                                              ).brightness ==
+                                                              Brightness.dark
+                                                          ? Colors.white
+                                                          : Colors.black87,
+                                                      fontSize: 12,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
                     ),
                   ),
-                ),
                 ],
               ),
             ),
@@ -2244,8 +2719,13 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
 
   List<DateTime> _weekDays() {
     // Start from Sunday: weekday % 7 gives us Sunday=0, Monday=1, etc.
-    final sunday = widget.date.subtract(Duration(days: widget.date.weekday % 7));
-    return List.generate(7, (i) => DateTime(sunday.year, sunday.month, sunday.day + i));
+    final sunday = widget.date.subtract(
+      Duration(days: widget.date.weekday % 7),
+    );
+    return List.generate(
+      7,
+      (i) => DateTime(sunday.year, sunday.month, sunday.day + i),
+    );
   }
 
   List<TimeOfDay> _allowedTimes() {
@@ -2260,12 +2740,21 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     return list;
   }
 
-  void _showShiftContextMenu(BuildContext context, ShiftPlaceholder shift, {Offset? position}) async {
+  void _showShiftContextMenu(
+    BuildContext context,
+    ShiftPlaceholder shift, {
+    Offset? position,
+  }) async {
     final result = await showMenu<String>(
       context: context,
-      position: position != null 
-        ? RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy)
-        : RelativeRect.fromLTRB(100, 100, 100, 100),
+      position: position != null
+          ? RelativeRect.fromLTRB(
+              position.dx,
+              position.dy,
+              position.dx,
+              position.dy,
+            )
+          : RelativeRect.fromLTRB(100, 100, 100, 100),
       items: [
         const PopupMenuItem(value: 'copy', child: Text('Copy')),
         const PopupMenuItem(value: 'delete', child: Text('Delete')),
@@ -2277,7 +2766,10 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     if (result == 'copy' && widget.onCopyShift != null) {
       widget.onCopyShift!(shift);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Shift copied'), duration: Duration(seconds: 1)),
+        const SnackBar(
+          content: Text('Shift copied'),
+          duration: Duration(seconds: 1),
+        ),
       );
     } else if (result == 'delete') {
       if (widget.onUpdateShift != null) {
@@ -2286,15 +2778,23 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     }
   }
 
-  void _showEmptyCellContextMenu(BuildContext context, DateTime day, int employeeId, {Offset? position}) async {
+  void _showEmptyCellContextMenu(
+    BuildContext context,
+    DateTime day,
+    int employeeId, {
+    Offset? position,
+  }) async {
     final result = await showMenu<String>(
       context: context,
-      position: position != null 
-        ? RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy)
-        : RelativeRect.fromLTRB(100, 100, 100, 100),
-      items: [
-        const PopupMenuItem(value: 'off', child: Text('Mark as Off')),
-      ],
+      position: position != null
+          ? RelativeRect.fromLTRB(
+              position.dx,
+              position.dy,
+              position.dx,
+              position.dy,
+            )
+          : RelativeRect.fromLTRB(100, 100, 100, 100),
+      items: [const PopupMenuItem(value: 'off', child: Text('Mark as Off'))],
     );
 
     if (!mounted || !context.mounted) return;
@@ -2321,7 +2821,13 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
   DateTime _timeOfDayToDateTime(DateTime day, TimeOfDay tod) {
     // Times with hour 0 or 1 are considered next-day times
     if (tod.hour == 0 || tod.hour == 1) {
-      return DateTime(day.year, day.month, day.day, tod.hour, tod.minute).add(const Duration(days: 1));
+      return DateTime(
+        day.year,
+        day.month,
+        day.day,
+        tod.hour,
+        tod.minute,
+      ).add(const Duration(days: 1));
     }
     return DateTime(day.year, day.month, day.day, tod.hour, tod.minute);
   }
@@ -2341,10 +2847,15 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     return days[date.weekday % 7];
   }
 
-  void _showNoteDialog(BuildContext context, DateTime day, String? existingNote) {
+  void _showNoteDialog(
+    BuildContext context,
+    DateTime day,
+    String? existingNote,
+  ) {
     final controller = TextEditingController(text: existingNote ?? '');
-    final dateStr = '${_dayOfWeekAbbr(day)}, ${day.month}/${day.day}/${day.year}';
-    
+    final dateStr =
+        '${_dayOfWeekAbbr(day)}, ${day.month}/${day.day}/${day.year}';
+
     showDialog(
       context: context,
       builder: (ctx) {
@@ -2402,7 +2913,10 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     );
   }
 
-  Future<Map<String, dynamic>> _checkAvailability(int employeeId, DateTime date) async {
+  Future<Map<String, dynamic>> _checkAvailability(
+    int employeeId,
+    DateTime date,
+  ) async {
     final cacheKey = '$employeeId-${date.year}-${date.month}-${date.day}';
     if (_availabilityCache.containsKey(cacheKey)) {
       return _availabilityCache[cacheKey]!;
@@ -2410,21 +2924,24 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
 
     // Priority 1: Check time-off first
     final timeOffList = await _timeOffDao.getAllTimeOff();
-    final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+    final dateStr =
+        '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
     final timeOffEntry = timeOffList.cast<TimeOffEntry?>().firstWhere(
-      (t) => t != null &&
-        t.employeeId == employeeId &&
-        '${t.date.year}-${t.date.month.toString().padLeft(2, '0')}-${t.date.day.toString().padLeft(2, '0')}' == dateStr,
+      (t) =>
+          t != null &&
+          t.employeeId == employeeId &&
+          '${t.date.year}-${t.date.month.toString().padLeft(2, '0')}-${t.date.day.toString().padLeft(2, '0')}' ==
+              dateStr,
       orElse: () => null,
     );
-    
+
     if (timeOffEntry != null) {
-      final timeRange = timeOffEntry.isAllDay 
-          ? 'All Day' 
+      final timeRange = timeOffEntry.isAllDay
+          ? 'All Day'
           : '${timeOffEntry.startTime ?? ''} - ${timeOffEntry.endTime ?? ''}';
       final result = {
-        'available': false, 
-        'reason': 'Time off scheduled ($timeRange)', 
+        'available': false,
+        'reason': 'Time off scheduled ($timeRange)',
         'type': 'time-off',
         'isAllDay': timeOffEntry.isAllDay,
         'startTime': timeOffEntry.startTime,
@@ -2436,12 +2953,21 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     }
 
     // Priority 2: Check availability patterns
-    final result = await _availabilityDao.isAvailable(employeeId, date, null, null);
+    final result = await _availabilityDao.isAvailable(
+      employeeId,
+      date,
+      null,
+      null,
+    );
     _availabilityCache[cacheKey] = result;
     return result;
   }
 
-  Future<void> _showAddShiftDialogWithAvailability(BuildContext context, DateTime day, int employeeId) async {
+  Future<void> _showAddShiftDialogWithAvailability(
+    BuildContext context,
+    DateTime day,
+    int employeeId,
+  ) async {
     // Get employee job code
     final employee = widget.employees.firstWhere((e) => e.id == employeeId);
 
@@ -2488,21 +3014,31 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     }
   }
 
-  Future<List<DateTime>?> _showEditDialog(BuildContext context, DateTime day, ShiftPlaceholder shift) async {
+  Future<List<DateTime>?> _showEditDialog(
+    BuildContext context,
+    DateTime day,
+    ShiftPlaceholder shift,
+  ) async {
     final times = _allowedTimes();
     int startIdx = 0;
     int endIdx = 0;
     for (int i = 0; i < times.length; i++) {
       final t = times[i];
       final dt = _timeOfDayToDateTime(day, t);
-      if (dt.hour == shift.start.hour && dt.minute == shift.start.minute && dt.day == shift.start.day) startIdx = i;
-      if (dt.hour == shift.end.hour && dt.minute == shift.end.minute && dt.day == shift.end.day) endIdx = i;
+      if (dt.hour == shift.start.hour &&
+          dt.minute == shift.start.minute &&
+          dt.day == shift.start.day)
+        startIdx = i;
+      if (dt.hour == shift.end.hour &&
+          dt.minute == shift.end.minute &&
+          dt.day == shift.end.day)
+        endIdx = i;
     }
 
     int selStart = startIdx;
     int selEnd = endIdx;
     String? selectedRunnerShift;
-    
+
     // Get the employee for this shift
     final employee = widget.employees.firstWhere(
       (e) => e.id == shift.employeeId,
@@ -2512,117 +3048,151 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     final result = await showDialog<List<DateTime>>(
       context: context,
       builder: (context) {
-        return StatefulBuilder(builder: (context, setState) {
-          return AlertDialog(
-            title: const Text('Edit Shift Time'),
-            content: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Time selection
-                Expanded(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      DropdownButton<int>(
-                        value: selStart,
-                        isExpanded: true,
-                        items: List.generate(times.length, (i) => DropdownMenuItem(value: i, child: Text(_formatTimeOfDay(times[i])))),
-                        onChanged: (v) {
-                          if (v == null) return;
-                          setState(() => selStart = v);
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                      DropdownButton<int>(
-                        value: selEnd,
-                        isExpanded: true,
-                        items: List.generate(times.length, (i) => DropdownMenuItem(value: i, child: Text(_formatTimeOfDay(times[i])))),
-                        onChanged: (v) {
-                          if (v == null) return;
-                          setState(() => selEnd = v);
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-                // Shift Runner buttons
-                Container(
-                  width: 100,
-                  padding: const EdgeInsets.only(left: 16),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const Text('Shift Runner:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                      const SizedBox(height: 8),
-                      ...ShiftRunner.shiftOrder.map((shiftType) {
-                        final isSelected = selectedRunnerShift == shiftType;
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 6),
-                          child: InkWell(
-                            onTap: () {
-                              setState(() {
-                                if (selectedRunnerShift == shiftType) {
-                                  selectedRunnerShift = null;
-                                } else {
-                                  selectedRunnerShift = shiftType;
-                                }
-                              });
-                            },
-                            borderRadius: BorderRadius.circular(4),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: isSelected 
-                                    ? _getShiftTypeColor(shiftType).withOpacity(0.3)
-                                    : _getShiftTypeColor(shiftType).withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(
-                                  color: _getShiftTypeColor(shiftType),
-                                  width: isSelected ? 2 : 1,
-                                ),
-                              ),
-                              child: Text(
-                                ShiftRunner.getLabelForType(shiftType),
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                  color: _getShiftTypeColor(shiftType),
-                                ),
-                                textAlign: TextAlign.center,
-                              ),
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('Edit Shift Time'),
+              content: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Time selection
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        DropdownButton<int>(
+                          value: selStart,
+                          isExpanded: true,
+                          items: List.generate(
+                            times.length,
+                            (i) => DropdownMenuItem(
+                              value: i,
+                              child: Text(_formatTimeOfDay(times[i])),
                             ),
                           ),
-                        );
-                      }).toList(),
-                    ],
+                          onChanged: (v) {
+                            if (v == null) return;
+                            setState(() => selStart = v);
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        DropdownButton<int>(
+                          value: selEnd,
+                          isExpanded: true,
+                          items: List.generate(
+                            times.length,
+                            (i) => DropdownMenuItem(
+                              value: i,
+                              child: Text(_formatTimeOfDay(times[i])),
+                            ),
+                          ),
+                          onChanged: (v) {
+                            if (v == null) return;
+                            setState(() => selEnd = v);
+                          },
+                        ),
+                      ],
+                    ),
                   ),
+                  // Shift Runner buttons
+                  Container(
+                    width: 100,
+                    padding: const EdgeInsets.only(left: 16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const Text(
+                          'Shift Runner:',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        ...ShiftRunner.shiftOrder.map((shiftType) {
+                          final isSelected = selectedRunnerShift == shiftType;
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: InkWell(
+                              onTap: () {
+                                setState(() {
+                                  if (selectedRunnerShift == shiftType) {
+                                    selectedRunnerShift = null;
+                                  } else {
+                                    selectedRunnerShift = shiftType;
+                                  }
+                                });
+                              },
+                              borderRadius: BorderRadius.circular(4),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 8,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? _getShiftTypeColor(
+                                          shiftType,
+                                        ).withOpacity(0.3)
+                                      : _getShiftTypeColor(
+                                          shiftType,
+                                        ).withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(
+                                    color: _getShiftTypeColor(shiftType),
+                                    width: isSelected ? 2 : 1,
+                                  ),
+                                ),
+                                child: Text(
+                                  ShiftRunner.getLabelForType(shiftType),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: isSelected
+                                        ? FontWeight.bold
+                                        : FontWeight.normal,
+                                    color: _getShiftTypeColor(shiftType),
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    // Save shift runner if selected
+                    if (selectedRunnerShift != null) {
+                      await _shiftRunnerDao.upsert(
+                        ShiftRunner(
+                          date: day,
+                          shiftType: selectedRunnerShift!,
+                          runnerName: employee.name,
+                        ),
+                      );
+                      _loadShiftRunnerData(); // Reload to update UI
+                    }
+
+                    final newStart = _timeOfDayToDateTime(day, times[selStart]);
+                    final newEnd = _timeOfDayToDateTime(day, times[selEnd]);
+                    Navigator.pop(context, [newStart, newEnd]);
+                  },
+                  child: const Text('OK'),
                 ),
               ],
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-              TextButton(
-                onPressed: () async {
-                  // Save shift runner if selected
-                  if (selectedRunnerShift != null) {
-                    await _shiftRunnerDao.upsert(ShiftRunner(
-                      date: day,
-                      shiftType: selectedRunnerShift!,
-                      runnerName: employee.name,
-                    ));
-                    _loadShiftRunnerData(); // Reload to update UI
-                  }
-                  
-                  final newStart = _timeOfDayToDateTime(day, times[selStart]);
-                  final newEnd = _timeOfDayToDateTime(day, times[selEnd]);
-                  Navigator.pop(context, [newStart, newEnd]);
-                },
-                child: const Text('OK'),
-              ),
-            ],
-          );
-        });
+            );
+          },
+        );
       },
     );
 
@@ -2640,13 +3210,24 @@ class MonthlyScheduleView extends StatefulWidget {
   final List<ShiftPlaceholder> shifts;
   final Map<DateTime, ScheduleNote> notes;
   final List<JobCodeSettings> jobCodeSettings;
-  final void Function(ShiftPlaceholder oldShift, DateTime newStart, DateTime newEnd)? onUpdateShift;
+  final void Function(
+    ShiftPlaceholder oldShift,
+    DateTime newStart,
+    DateTime newEnd,
+  )?
+  onUpdateShift;
   final void Function(ShiftPlaceholder shift)? onCopyShift;
   final void Function(DateTime day, int employeeId)? onPasteTarget;
-  final void Function(ShiftPlaceholder shift, DateTime newDay, int newEmployeeId)? onMoveShift;
+  final void Function(
+    ShiftPlaceholder shift,
+    DateTime newDay,
+    int newEmployeeId,
+  )?
+  onMoveShift;
   final void Function(DateTime day, String note)? onSaveNote;
   final void Function(DateTime day)? onDeleteNote;
   final bool clipboardAvailable;
+  final int shiftRunnerRefreshKey;
 
   const MonthlyScheduleView({
     super.key,
@@ -2662,6 +3243,7 @@ class MonthlyScheduleView extends StatefulWidget {
     this.onSaveNote,
     this.onDeleteNote,
     this.clipboardAvailable = false,
+    this.shiftRunnerRefreshKey = 0,
   });
 
   @override
@@ -2689,7 +3271,9 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     super.initState();
     _horizontalScrollController = ScrollController();
     _loadShiftRunnerData();
-    print('MonthlyScheduleView initState: ${widget.shifts.length} shifts loaded');
+    print(
+      'MonthlyScheduleView initState: ${widget.shifts.length} shifts loaded',
+    );
   }
 
   @override
@@ -2701,13 +3285,19 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
   @override
   void didUpdateWidget(MonthlyScheduleView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.date.month != widget.date.month || oldWidget.date.year != widget.date.year) {
+    if (oldWidget.date.month != widget.date.month ||
+        oldWidget.date.year != widget.date.year ||
+        oldWidget.shiftRunnerRefreshKey != widget.shiftRunnerRefreshKey) {
       _loadShiftRunnerData();
     }
     if (oldWidget.shifts.length != widget.shifts.length) {
-      print('MonthlyScheduleView didUpdateWidget: shifts changed from ${oldWidget.shifts.length} to ${widget.shifts.length}');
+      print(
+        'MonthlyScheduleView didUpdateWidget: shifts changed from ${oldWidget.shifts.length} to ${widget.shifts.length}',
+      );
       for (var shift in widget.shifts) {
-        print('  Shift: employee=${shift.employeeId}, date=${shift.start.year}-${shift.start.month}-${shift.start.day} ${shift.start.hour}:${shift.start.minute}, text=${shift.text}');
+        print(
+          '  Shift: employee=${shift.employeeId}, date=${shift.start.year}-${shift.start.month}-${shift.start.day} ${shift.start.hour}:${shift.start.minute}, text=${shift.text}',
+        );
       }
     }
   }
@@ -2727,7 +3317,10 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
   }
 
   Color _getShiftTypeColor(String shiftType) {
-    final hex = _shiftRunnerColors[shiftType] ?? ShiftRunnerColor.defaultColors[shiftType] ?? '#808080';
+    final hex =
+        _shiftRunnerColors[shiftType] ??
+        ShiftRunnerColor.defaultColors[shiftType] ??
+        '#808080';
     final cleanHex = hex.replaceFirst('#', '');
     return Color(int.parse('FF$cleanHex', radix: 16));
   }
@@ -2735,7 +3328,8 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
   // Get shift runner for a given day and shift type
   ShiftRunner? _getShiftRunner(DateTime day, String shiftType) {
     return _shiftRunners.cast<ShiftRunner?>().firstWhere(
-      (r) => r != null &&
+      (r) =>
+          r != null &&
           r.date.year == day.year &&
           r.date.month == day.month &&
           r.date.day == day.day &&
@@ -2759,7 +3353,10 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     return null;
   }
 
-  Future<Map<String, dynamic>> _checkAvailability(int employeeId, DateTime date) async {
+  Future<Map<String, dynamic>> _checkAvailability(
+    int employeeId,
+    DateTime date,
+  ) async {
     final cacheKey = '$employeeId-${date.year}-${date.month}-${date.day}';
     if (_availabilityCache.containsKey(cacheKey)) {
       return _availabilityCache[cacheKey]!;
@@ -2767,21 +3364,24 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
 
     // Priority 1: Check time-off first
     final timeOffList = await _timeOffDao.getAllTimeOff();
-    final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+    final dateStr =
+        '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
     final timeOffEntry = timeOffList.cast<TimeOffEntry?>().firstWhere(
-      (t) => t != null &&
-        t.employeeId == employeeId &&
-        '${t.date.year}-${t.date.month.toString().padLeft(2, '0')}-${t.date.day.toString().padLeft(2, '0')}' == dateStr,
+      (t) =>
+          t != null &&
+          t.employeeId == employeeId &&
+          '${t.date.year}-${t.date.month.toString().padLeft(2, '0')}-${t.date.day.toString().padLeft(2, '0')}' ==
+              dateStr,
       orElse: () => null,
     );
-    
+
     if (timeOffEntry != null) {
-      final timeRange = timeOffEntry.isAllDay 
-          ? 'All Day' 
+      final timeRange = timeOffEntry.isAllDay
+          ? 'All Day'
           : '${timeOffEntry.startTime ?? ''} - ${timeOffEntry.endTime ?? ''}';
       final result = {
-        'available': false, 
-        'reason': 'Time off scheduled ($timeRange)', 
+        'available': false,
+        'reason': 'Time off scheduled ($timeRange)',
         'type': 'time-off',
         'isAllDay': timeOffEntry.isAllDay,
         'startTime': timeOffEntry.startTime,
@@ -2793,7 +3393,12 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     }
 
     // Priority 2: Check availability patterns
-    final result = await _availabilityDao.isAvailable(employeeId, date, null, null);
+    final result = await _availabilityDao.isAvailable(
+      employeeId,
+      date,
+      null,
+      null,
+    );
     _availabilityCache[cacheKey] = result;
     return result;
   }
@@ -2852,10 +3457,20 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     }
   }
 
-  void _showEmptyCellContextMenu(BuildContext context, DateTime day, int employeeId, Offset position) async {
+  void _showEmptyCellContextMenu(
+    BuildContext context,
+    DateTime day,
+    int employeeId,
+    Offset position,
+  ) async {
     final result = await showMenu<String>(
       context: context,
-      position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy),
+      position: RelativeRect.fromLTRB(
+        position.dx,
+        position.dy,
+        position.dx,
+        position.dy,
+      ),
       items: [
         const PopupMenuItem(value: 'add', child: Text('Add Shift')),
         if (widget.clipboardAvailable)
@@ -2866,12 +3481,15 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     if (!mounted || !context.mounted) return;
 
     if (result == 'add') {
-      _showEditDialog(context, ShiftPlaceholder(
-        employeeId: employeeId,
-        start: DateTime(day.year, day.month, day.day, 9, 0),
-        end: DateTime(day.year, day.month, day.day, 17, 0),
-        text: '',
-      ));
+      _showEditDialog(
+        context,
+        ShiftPlaceholder(
+          employeeId: employeeId,
+          start: DateTime(day.year, day.month, day.day, 9, 0),
+          end: DateTime(day.year, day.month, day.day, 17, 0),
+          text: '',
+        ),
+      );
     } else if (result == 'paste') {
       widget.onPasteTarget?.call(day, employeeId);
     }
@@ -2881,28 +3499,32 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     // Get first and last day of month
     final firstDayOfMonth = DateTime(widget.date.year, widget.date.month, 1);
     final lastDayOfMonth = DateTime(widget.date.year, widget.date.month + 1, 0);
-    
+
     // Find the Sunday before or on the first day
-    final startDate = firstDayOfMonth.subtract(Duration(days: firstDayOfMonth.weekday % 7));
-    
+    final startDate = firstDayOfMonth.subtract(
+      Duration(days: firstDayOfMonth.weekday % 7),
+    );
+
     // Build weeks (5 or 6 weeks to cover the month)
     final weeks = <List<DateTime?>>[];
     DateTime currentDate = startDate;
-    
-    while (currentDate.isBefore(lastDayOfMonth) || currentDate.month == lastDayOfMonth.month) {
+
+    while (currentDate.isBefore(lastDayOfMonth) ||
+        currentDate.month == lastDayOfMonth.month) {
       final week = <DateTime?>[];
       for (int i = 0; i < 7; i++) {
         week.add(currentDate);
         currentDate = currentDate.add(const Duration(days: 1));
       }
       weeks.add(week);
-      
+
       // Stop after we've passed the last day of the month
-      if (weeks.length >= 6 || (currentDate.month != widget.date.month && weeks.length >= 5)) {
+      if (weeks.length >= 6 ||
+          (currentDate.month != widget.date.month && weeks.length >= 5)) {
         break;
       }
     }
-    
+
     return weeks;
   }
 
@@ -2913,12 +3535,21 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     return '$h:$mm $suffix';
   }
 
-  void _showShiftContextMenu(BuildContext context, ShiftPlaceholder shift, Offset? position) async {
+  void _showShiftContextMenu(
+    BuildContext context,
+    ShiftPlaceholder shift,
+    Offset? position,
+  ) async {
     final result = await showMenu<String>(
       context: context,
-      position: position != null 
-        ? RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy)
-        : const RelativeRect.fromLTRB(100, 100, 100, 100),
+      position: position != null
+          ? RelativeRect.fromLTRB(
+              position.dx,
+              position.dy,
+              position.dx,
+              position.dy,
+            )
+          : const RelativeRect.fromLTRB(100, 100, 100, 100),
       items: [
         const PopupMenuItem(value: 'edit', child: Text('Edit Shift')),
         const PopupMenuItem(value: 'copy', child: Text('Copy Shift')),
@@ -2933,7 +3564,10 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     } else if (result == 'copy') {
       widget.onCopyShift?.call(shift);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Shift copied'), duration: Duration(seconds: 1)),
+        const SnackBar(
+          content: Text('Shift copied'),
+          duration: Duration(seconds: 1),
+        ),
       );
     } else if (result == 'delete') {
       if (widget.onUpdateShift != null) {
@@ -2942,7 +3576,10 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     }
   }
 
-  Future<void> _showEditDialog(BuildContext context, ShiftPlaceholder shift) async {
+  Future<void> _showEditDialog(
+    BuildContext context,
+    ShiftPlaceholder shift,
+  ) async {
     // Find employee for this shift
     final employee = widget.employees.firstWhere(
       (e) => e.id == shift.employeeId,
@@ -2970,74 +3607,252 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     if (!context.mounted) return;
 
     final times = _allowedTimes();
-    int selStart = times.indexWhere((t) => t.hour == shift.start.hour && t.minute == shift.start.minute);
-    int selEnd = times.indexWhere((t) => t.hour == shift.end.hour && t.minute == shift.end.minute);
+    int selStart = times.indexWhere(
+      (t) => t.hour == shift.start.hour && t.minute == shift.start.minute,
+    );
+    int selEnd = times.indexWhere(
+      (t) => t.hour == shift.end.hour && t.minute == shift.end.minute,
+    );
     if (selStart == -1) selStart = 0;
     if (selEnd == -1) selEnd = times.length - 1;
 
     ShiftTemplate? selectedTemplate;
     String? selectedRunnerShift;
-    
+
     final result = await showDialog<List<DateTime>>(
       context: context,
       builder: (context) {
-        return StatefulBuilder(builder: (context, setDialogState) {
-          return AlertDialog(
-            title: const Text('Edit Shift'),
-            content: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (templates.isNotEmpty)
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Edit Shift'),
+              content: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (templates.isNotEmpty)
+                    Container(
+                      width: 140,
+                      padding: const EdgeInsets.only(right: 16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Text(
+                            'Templates:',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          ...templates.map((template) {
+                            final startParts = template.startTime.split(':');
+                            final startHour = int.parse(startParts[0]);
+                            final startMin = int.parse(startParts[1]);
+                            final endParts = template.endTime.split(':');
+                            final endHour = int.parse(endParts[0]);
+                            final endMin = int.parse(endParts[1]);
+
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: OutlinedButton(
+                                style: OutlinedButton.styleFrom(
+                                  backgroundColor: selectedTemplate == template
+                                      ? Colors.blue.withOpacity(0.1)
+                                      : null,
+                                  side: BorderSide(
+                                    color: selectedTemplate == template
+                                        ? Colors.blue
+                                        : Colors.grey,
+                                    width: selectedTemplate == template ? 2 : 1,
+                                  ),
+                                ),
+                                onPressed: () {
+                                  int startIdx = times.indexWhere(
+                                    (t) =>
+                                        t.hour == startHour &&
+                                        t.minute == startMin,
+                                  );
+                                  if (startIdx == -1) startIdx = 0;
+
+                                  int endIdx = times.indexWhere(
+                                    (t) =>
+                                        t.hour == endHour && t.minute == endMin,
+                                  );
+                                  if (endIdx == -1) endIdx = times.length - 1;
+
+                                  setDialogState(() {
+                                    selectedTemplate = template;
+                                    selStart = startIdx;
+                                    selEnd = endIdx;
+                                  });
+                                },
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      template.templateName,
+                                      style: const TextStyle(fontSize: 11),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '${template.startTime}-${template.endTime}',
+                                      style: const TextStyle(
+                                        fontSize: 10,
+                                        color: Colors.grey,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ],
+                      ),
+                    ),
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: bannerColor.withOpacity(0.2),
+                            border: Border.all(color: bannerColor),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                type == 'time-off'
+                                    ? Icons.event_busy
+                                    : (isAvailable
+                                          ? Icons.check_circle
+                                          : Icons.warning),
+                                color: bannerColor,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  reason,
+                                  style: TextStyle(
+                                    color: bannerColor.withOpacity(0.9),
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        DropdownButton<int>(
+                          value: selStart,
+                          isExpanded: true,
+                          items: times.asMap().entries.map((e) {
+                            return DropdownMenuItem(
+                              value: e.key,
+                              child: Text(_formatTimeOfDay(e.value)),
+                            );
+                          }).toList(),
+                          onChanged: (v) {
+                            setDialogState(() {
+                              selStart = v!;
+                              if (selStart >= selEnd)
+                                selEnd = (selStart + 1).clamp(
+                                  0,
+                                  times.length - 1,
+                                );
+                              selectedTemplate = null;
+                            });
+                          },
+                        ),
+                        const SizedBox(height: 8),
+                        DropdownButton<int>(
+                          value: selEnd,
+                          isExpanded: true,
+                          items: times.asMap().entries.map((e) {
+                            return DropdownMenuItem(
+                              value: e.key,
+                              child: Text(_formatTimeOfDay(e.value)),
+                            );
+                          }).toList(),
+                          onChanged: (v) {
+                            setDialogState(() {
+                              selEnd = v!;
+                              if (selEnd <= selStart)
+                                selStart = (selEnd - 1).clamp(
+                                  0,
+                                  times.length - 1,
+                                );
+                              selectedTemplate = null;
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Shift Runner buttons
                   Container(
-                    width: 140,
-                    padding: const EdgeInsets.only(right: 16),
+                    width: 100,
+                    padding: const EdgeInsets.only(left: 16),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const Text('Templates:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                        const Text(
+                          'Shift Runner:',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
                         const SizedBox(height: 8),
-                        ...templates.map((template) {
-                          final startParts = template.startTime.split(':');
-                          final startHour = int.parse(startParts[0]);
-                          final startMin = int.parse(startParts[1]);
-                          final endParts = template.endTime.split(':');
-                          final endHour = int.parse(endParts[0]);
-                          final endMin = int.parse(endParts[1]);
-
+                        ...ShiftRunner.shiftOrder.map((shiftType) {
+                          final isSelected = selectedRunnerShift == shiftType;
                           return Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: OutlinedButton(
-                              style: OutlinedButton.styleFrom(
-                                backgroundColor: selectedTemplate == template ? Colors.blue.withOpacity(0.1) : null,
-                                side: BorderSide(
-                                  color: selectedTemplate == template ? Colors.blue : Colors.grey,
-                                  width: selectedTemplate == template ? 2 : 1,
-                                ),
-                              ),
-                              onPressed: () {
-                                int startIdx = times.indexWhere((t) => t.hour == startHour && t.minute == startMin);
-                                if (startIdx == -1) startIdx = 0;
-                                
-                                int endIdx = times.indexWhere((t) => t.hour == endHour && t.minute == endMin);
-                                if (endIdx == -1) endIdx = times.length - 1;
-
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: InkWell(
+                              onTap: () {
                                 setDialogState(() {
-                                  selectedTemplate = template;
-                                  selStart = startIdx;
-                                  selEnd = endIdx;
+                                  if (selectedRunnerShift == shiftType) {
+                                    selectedRunnerShift = null;
+                                  } else {
+                                    selectedRunnerShift = shiftType;
+                                  }
                                 });
                               },
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(template.templateName, style: const TextStyle(fontSize: 11)),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    '${template.startTime}-${template.endTime}',
-                                    style: const TextStyle(fontSize: 10, color: Colors.grey),
+                              borderRadius: BorderRadius.circular(4),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 8,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? _getShiftTypeColor(
+                                          shiftType,
+                                        ).withOpacity(0.3)
+                                      : _getShiftTypeColor(
+                                          shiftType,
+                                        ).withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(
+                                    color: _getShiftTypeColor(shiftType),
+                                    width: isSelected ? 2 : 1,
                                   ),
-                                ],
+                                ),
+                                child: Text(
+                                  ShiftRunner.getLabelForType(shiftType),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: isSelected
+                                        ? FontWeight.bold
+                                        : FontWeight.normal,
+                                    color: _getShiftTypeColor(shiftType),
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
                               ),
                             ),
                           );
@@ -3045,149 +3860,44 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
                       ],
                     ),
                   ),
-                Expanded(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: bannerColor.withOpacity(0.2),
-                          border: Border.all(color: bannerColor),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              type == 'time-off' ? Icons.event_busy : (isAvailable ? Icons.check_circle : Icons.warning),
-                              color: bannerColor,
-                              size: 20,
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                reason,
-                                style: TextStyle(color: bannerColor.withOpacity(0.9), fontSize: 12),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      DropdownButton<int>(
-                        value: selStart,
-                        isExpanded: true,
-                        items: times.asMap().entries.map((e) {
-                          return DropdownMenuItem(value: e.key, child: Text(_formatTimeOfDay(e.value)));
-                        }).toList(),
-                        onChanged: (v) {
-                          setDialogState(() {
-                            selStart = v!;
-                            if (selStart >= selEnd) selEnd = (selStart + 1).clamp(0, times.length - 1);
-                            selectedTemplate = null;
-                          });
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                      DropdownButton<int>(
-                        value: selEnd,
-                        isExpanded: true,
-                        items: times.asMap().entries.map((e) {
-                          return DropdownMenuItem(value: e.key, child: Text(_formatTimeOfDay(e.value)));
-                        }).toList(),
-                        onChanged: (v) {
-                          setDialogState(() {
-                            selEnd = v!;
-                            if (selEnd <= selStart) selStart = (selEnd - 1).clamp(0, times.length - 1);
-                            selectedTemplate = null;
-                          });
-                        },
-                      ),
-                    ],
-                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
                 ),
-                // Shift Runner buttons
-                Container(
-                  width: 100,
-                  padding: const EdgeInsets.only(left: 16),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const Text('Shift Runner:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                      const SizedBox(height: 8),
-                      ...ShiftRunner.shiftOrder.map((shiftType) {
-                        final isSelected = selectedRunnerShift == shiftType;
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 6),
-                          child: InkWell(
-                            onTap: () {
-                              setDialogState(() {
-                                if (selectedRunnerShift == shiftType) {
-                                  selectedRunnerShift = null;
-                                } else {
-                                  selectedRunnerShift = shiftType;
-                                }
-                              });
-                            },
-                            borderRadius: BorderRadius.circular(4),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: isSelected 
-                                    ? _getShiftTypeColor(shiftType).withOpacity(0.3)
-                                    : _getShiftTypeColor(shiftType).withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(
-                                  color: _getShiftTypeColor(shiftType),
-                                  width: isSelected ? 2 : 1,
-                                ),
-                              ),
-                              child: Text(
-                                ShiftRunner.getLabelForType(shiftType),
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                  color: _getShiftTypeColor(shiftType),
-                                ),
-                                textAlign: TextAlign.center,
-                              ),
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                    ],
-                  ),
+                TextButton(
+                  onPressed: () async {
+                    // Save shift runner if selected
+                    if (selectedRunnerShift != null) {
+                      await _shiftRunnerDao.upsert(
+                        ShiftRunner(
+                          date: day,
+                          shiftType: selectedRunnerShift!,
+                          runnerName: employee.name,
+                        ),
+                      );
+                      _loadShiftRunnerData(); // Reload to update UI
+                    }
+
+                    final newStart = _timeOfDayToDateTime(day, times[selStart]);
+                    final newEnd = _timeOfDayToDateTime(day, times[selEnd]);
+                    if (!newEnd.isAfter(newStart)) {
+                      Navigator.pop(context, [
+                        newStart,
+                        newStart.add(const Duration(hours: 1)),
+                      ]);
+                    } else {
+                      Navigator.pop(context, [newStart, newEnd]);
+                    }
+                  },
+                  child: const Text('Save'),
                 ),
               ],
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-              TextButton(
-                onPressed: () async {
-                  // Save shift runner if selected
-                  if (selectedRunnerShift != null) {
-                    await _shiftRunnerDao.upsert(ShiftRunner(
-                      date: day,
-                      shiftType: selectedRunnerShift!,
-                      runnerName: employee.name,
-                    ));
-                    _loadShiftRunnerData(); // Reload to update UI
-                  }
-                  
-                  final newStart = _timeOfDayToDateTime(day, times[selStart]);
-                  final newEnd = _timeOfDayToDateTime(day, times[selEnd]);
-                  if (!newEnd.isAfter(newStart)) {
-                    Navigator.pop(context, [newStart, newStart.add(const Duration(hours: 1))]);
-                  } else {
-                    Navigator.pop(context, [newStart, newEnd]);
-                  }
-                },
-                child: const Text('Save'),
-              ),
-            ],
-          );
-        });
+            );
+          },
+        );
       },
     );
 
@@ -3208,32 +3918,49 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
   }
 
   DateTime _timeOfDayToDateTime(DateTime day, TimeOfDay tod) {
-    DateTime result = DateTime(day.year, day.month, day.day, tod.hour, tod.minute);
+    DateTime result = DateTime(
+      day.year,
+      day.month,
+      day.day,
+      tod.hour,
+      tod.minute,
+    );
     if (tod.hour == 0 || tod.hour == 1) {
       result = result.add(const Duration(days: 1));
     }
     return result;
   }
 
-  Widget _buildShiftChip(ShiftPlaceholder shift, bool isSelected, String startLabel, String endLabel, BuildContext context) {
+  Widget _buildShiftChip(
+    ShiftPlaceholder shift,
+    bool isSelected,
+    String startLabel,
+    String endLabel,
+    BuildContext context,
+  ) {
     // Check if this employee is a shift runner for this day
     final day = DateTime(shift.start.year, shift.start.month, shift.start.day);
-    final runnerShiftType = _getShiftRunnerTypeForEmployee(day, shift.employeeId);
-    final runnerColor = runnerShiftType != null ? _getShiftTypeColor(runnerShiftType) : null;
-    
+    final runnerShiftType = _getShiftRunnerTypeForEmployee(
+      day,
+      shift.employeeId,
+    );
+    final runnerColor = runnerShiftType != null
+        ? _getShiftTypeColor(runnerShiftType)
+        : null;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 3),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
       decoration: BoxDecoration(
-        color: isSelected 
+        color: isSelected
             ? Colors.blue.withAlpha(128)
             : Theme.of(context).colorScheme.primaryContainer.withAlpha(128),
         borderRadius: BorderRadius.circular(4),
-        border: isSelected 
+        border: isSelected
             ? Border.all(color: Colors.blue, width: 2)
             : runnerColor != null
-                ? Border(left: BorderSide(color: runnerColor, width: 4))
-                : null,
+            ? Border(left: BorderSide(color: runnerColor, width: 4))
+            : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -3251,18 +3978,12 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
           else ...[
             Text(
               '$startLabel-',
-              style: const TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-              ),
+              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600),
               textAlign: TextAlign.center,
             ),
             Text(
               endLabel,
-              style: const TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-              ),
+              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600),
               textAlign: TextAlign.center,
             ),
             if (shift.text.isNotEmpty)
@@ -3288,14 +4009,16 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     required double cellWidth,
   }) {
     final shiftsForCell = widget.shifts.where((s) {
-      final match = s.employeeId == employee.id &&
+      final match =
+          s.employeeId == employee.id &&
           s.start.year == day.year &&
           s.start.month == day.month &&
           s.start.day == day.day;
       return match;
     }).toList();
 
-    final isDragHover = _dragHoverDay?.year == day.year &&
+    final isDragHover =
+        _dragHoverDay?.year == day.year &&
         _dragHoverDay?.month == day.month &&
         _dragHoverDay?.day == day.day &&
         _dragHoverEmployeeId == employee.id;
@@ -3326,7 +4049,8 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
           onTap: shiftsForCell.isEmpty
               ? () {
                   // If clipboard has data, paste on single click
-                  if (widget.clipboardAvailable && widget.onPasteTarget != null) {
+                  if (widget.clipboardAvailable &&
+                      widget.onPasteTarget != null) {
                     widget.onPasteTarget!(day, employee.id!);
                   } else {
                     // Otherwise show add shift dialog
@@ -3356,14 +4080,20 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
             width: cellWidth,
             padding: const EdgeInsets.all(6),
             decoration: BoxDecoration(
-              border: Border(left: BorderSide(color: Theme.of(context).dividerColor)),
+              border: Border(
+                left: BorderSide(color: Theme.of(context).dividerColor),
+              ),
               color: isDragHover
                   ? Colors.blue.withAlpha(50)
                   : !isCurrentMonth
-                      ? Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(25)
-                      : isWeekend
-                          ? Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(51)
-                          : null,
+                  ? Theme.of(
+                      context,
+                    ).colorScheme.surfaceContainerHighest.withAlpha(25)
+                  : isWeekend
+                  ? Theme.of(
+                      context,
+                    ).colorScheme.surfaceContainerHighest.withAlpha(51)
+                  : null,
             ),
             child: shiftsForCell.isEmpty
                 ? FutureBuilder<Map<String, dynamic>>(
@@ -3377,12 +4107,19 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
                           showDash = true;
                         }
                       }
-                      
+
                       if (isDragHover) {
-                        return const Center(child: Icon(Icons.add, color: Colors.blue, size: 20));
+                        return const Center(
+                          child: Icon(Icons.add, color: Colors.blue, size: 20),
+                        );
                       }
                       if (showDash) {
-                        return const Center(child: Text('-', style: TextStyle(fontSize: 18, color: Colors.grey)));
+                        return const Center(
+                          child: Text(
+                            '-',
+                            style: TextStyle(fontSize: 18, color: Colors.grey),
+                          ),
+                        );
                       }
                       return const SizedBox.shrink();
                     },
@@ -3393,10 +4130,16 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
                     children: shiftsForCell.map((shift) {
                       final isSelected = _selectedShift == shift;
                       final startLabel = _formatTimeOfDay(
-                        TimeOfDay(hour: shift.start.hour, minute: shift.start.minute),
+                        TimeOfDay(
+                          hour: shift.start.hour,
+                          minute: shift.start.minute,
+                        ),
                       );
                       final endLabel = _formatTimeOfDay(
-                        TimeOfDay(hour: shift.end.hour, minute: shift.end.minute),
+                        TimeOfDay(
+                          hour: shift.end.hour,
+                          minute: shift.end.minute,
+                        ),
                       );
 
                       return Draggable<ShiftPlaceholder>(
@@ -3411,14 +4154,25 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
                               borderRadius: BorderRadius.circular(4),
                             ),
                             child: Text(
-                              _isLabelOnly(shift.text) ? _labelText(shift.text) : '$startLabel-$endLabel',
-                              style: const TextStyle(color: Colors.white, fontSize: 10),
+                              _isLabelOnly(shift.text)
+                                  ? _labelText(shift.text)
+                                  : '$startLabel-$endLabel',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                              ),
                             ),
                           ),
                         ),
                         childWhenDragging: Opacity(
                           opacity: 0.3,
-                          child: _buildShiftChip(shift, isSelected, startLabel, endLabel, context),
+                          child: _buildShiftChip(
+                            shift,
+                            isSelected,
+                            startLabel,
+                            endLabel,
+                            context,
+                          ),
                         ),
                         child: GestureDetector(
                           onTap: () {
@@ -3433,9 +4187,19 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
                             setState(() {
                               _selectedShift = shift;
                             });
-                            _showShiftContextMenu(context, shift, details.globalPosition);
+                            _showShiftContextMenu(
+                              context,
+                              shift,
+                              details.globalPosition,
+                            );
                           },
-                          child: _buildShiftChip(shift, isSelected, startLabel, endLabel, context),
+                          child: _buildShiftChip(
+                            shift,
+                            isSelected,
+                            startLabel,
+                            endLabel,
+                            context,
+                          ),
                         ),
                       );
                     }).toList(),
@@ -3463,12 +4227,15 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     }
 
     Color jobCodeColorFor(String jobCode) {
-      final settings = widget.jobCodeSettings.cast<JobCodeSettings?>().firstWhere(
+      final settings = widget.jobCodeSettings
+          .cast<JobCodeSettings?>()
+          .firstWhere(
             (s) => s != null && s.code.toLowerCase() == jobCode.toLowerCase(),
             orElse: () => null,
           );
       final hex = settings?.colorHex;
-      if (hex == null || hex.trim().isEmpty) return Theme.of(context).colorScheme.primary;
+      if (hex == null || hex.trim().isEmpty)
+        return Theme.of(context).colorScheme.primary;
       return colorFromHex(hex);
     }
 
@@ -3485,14 +4252,26 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
           if (prev != curr) jobCodeBreaks++;
         }
 
-        final availableWidth = constraints.maxWidth - dayColumnWidth - tablePadding;
-        final effectiveAvailableWidth = (availableWidth - (jobCodeBreaks * groupGapWidth)).clamp(0.0, double.infinity);
-        final cellWidth = widget.employees.isNotEmpty 
-            ? (effectiveAvailableWidth / widget.employees.length).clamp(80.0, 200.0)
+        final availableWidth =
+            constraints.maxWidth - dayColumnWidth - tablePadding;
+        final effectiveAvailableWidth =
+            (availableWidth - (jobCodeBreaks * groupGapWidth)).clamp(
+              0.0,
+              double.infinity,
+            );
+        final cellWidth = widget.employees.isNotEmpty
+            ? (effectiveAvailableWidth / widget.employees.length).clamp(
+                80.0,
+                200.0,
+              )
             : 100.0;
 
         // Account for borders (2px on each side = 4px total)
-        final totalWidth = dayColumnWidth + (cellWidth * widget.employees.length) + (jobCodeBreaks * groupGapWidth) + 4;
+        final totalWidth =
+            dayColumnWidth +
+            (cellWidth * widget.employees.length) +
+            (jobCodeBreaks * groupGapWidth) +
+            4;
 
         List<Widget> buildEmployeeHeaderCells() {
           final cells = <Widget>[];
@@ -3508,25 +4287,36 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
             }
 
             final bg = jobCodeColorFor(employee.jobCode);
-            final fg = ThemeData.estimateBrightnessForColor(bg) == Brightness.dark ? Colors.white : Colors.black;
+            final fg =
+                ThemeData.estimateBrightnessForColor(bg) == Brightness.dark
+                ? Colors.white
+                : Colors.black;
 
-            cells.add(Container(
-              width: cellWidth,
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-              decoration: BoxDecoration(
-                color: bg,
-                border: Border(left: BorderSide(color: Theme.of(context).dividerColor)),
-              ),
-              child: Center(
-                child: Text(
-                  employee.name,
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: fg),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
+            cells.add(
+              Container(
+                width: cellWidth,
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                decoration: BoxDecoration(
+                  color: bg,
+                  border: Border(
+                    left: BorderSide(color: Theme.of(context).dividerColor),
+                  ),
+                ),
+                child: Center(
+                  child: Text(
+                    employee.name,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: fg,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                  ),
                 ),
               ),
-            ));
+            );
           }
           return cells;
         }
@@ -3541,164 +4331,232 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
               scrollDirection: Axis.horizontal,
               child: SizedBox(
                 width: totalWidth,
-              child: Column(
-                children: [
-                  Container(
-                    width: totalWidth,
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primaryContainer,
-                      border: Border.all(color: Theme.of(context).dividerColor, width: 2),
-                    ),
-                    child: Row(
-                      children: [
-                        SizedBox(
-                          width: dayColumnWidth,
-                          height: 60,
-                          child: const Center(
-                            child: Text('Day', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                          ),
+                child: Column(
+                  children: [
+                    Container(
+                      width: totalWidth,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primaryContainer,
+                        border: Border.all(
+                          color: Theme.of(context).dividerColor,
+                          width: 2,
                         ),
-                        ...buildEmployeeHeaderCells(),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: ListView.builder(
-                      padding: EdgeInsets.zero,
-                      itemCount: weeks.length,
-                      itemBuilder: (context, weekIndex) {
-                        final week = weeks[weekIndex];
-
-                        return Container(
-                          width: totalWidth,
-                          margin: const EdgeInsets.only(bottom: 12),
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Theme.of(context).dividerColor, width: 2),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Column(
-                            children: week.asMap().entries.map((entry) {
-                              final dayIndex = entry.key;
-                              final day = entry.value;
-
-                              if (day == null) {
-                                return const SizedBox.shrink();
-                              }
-
-                              final isCurrentMonth = day.month == widget.date.month;
-                              final isWeekend = day.weekday == DateTime.saturday || day.weekday == DateTime.sunday;
-                              final dayName = dayNames[day.weekday % 7];
-
-                              return Container(
-                                decoration: BoxDecoration(
-                                  border: dayIndex < 6
-                                      ? Border(bottom: BorderSide(color: Theme.of(context).dividerColor))
-                                      : null,
+                      ),
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: dayColumnWidth,
+                            height: 60,
+                            child: const Center(
+                              child: Text(
+                                'Day',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
                                 ),
-                                child: IntrinsicHeight(
-                                  child: Row(
-                                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                                    children: [
-                                      // Day label column with notes
-                                      GestureDetector(
-                                        onTap: () => _showNoteDialog(context, day),
-                                        child: Container(
-                                          width: dayColumnWidth,
-                                          padding: const EdgeInsets.all(8),
-                                          decoration: BoxDecoration(
-                                            border: Border(right: BorderSide(color: Theme.of(context).dividerColor, width: 2)),
-                                            color: isWeekend
-                                                ? Theme.of(context).colorScheme.primaryContainer.withAlpha(51)
-                                                : !isCurrentMonth
-                                                    ? Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(25)
-                                                    : null,
-                                          ),
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            mainAxisAlignment: MainAxisAlignment.center,
-                                            children: [
-                                              Row(
-                                                children: [
-                                                  Text(
-                                                    dayName,
-                                                    style: const TextStyle(
-                                                      fontWeight: FontWeight.bold,
-                                                      fontSize: 14,
+                              ),
+                            ),
+                          ),
+                          ...buildEmployeeHeaderCells(),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: ListView.builder(
+                        padding: EdgeInsets.zero,
+                        itemCount: weeks.length,
+                        itemBuilder: (context, weekIndex) {
+                          final week = weeks[weekIndex];
+
+                          return Container(
+                            width: totalWidth,
+                            margin: const EdgeInsets.only(bottom: 12),
+                            decoration: BoxDecoration(
+                              border: Border.all(
+                                color: Theme.of(context).dividerColor,
+                                width: 2,
+                              ),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Column(
+                              children: week.asMap().entries.map((entry) {
+                                final dayIndex = entry.key;
+                                final day = entry.value;
+
+                                if (day == null) {
+                                  return const SizedBox.shrink();
+                                }
+
+                                final isCurrentMonth =
+                                    day.month == widget.date.month;
+                                final isWeekend =
+                                    day.weekday == DateTime.saturday ||
+                                    day.weekday == DateTime.sunday;
+                                final dayName = dayNames[day.weekday % 7];
+
+                                return Container(
+                                  decoration: BoxDecoration(
+                                    border: dayIndex < 6
+                                        ? Border(
+                                            bottom: BorderSide(
+                                              color: Theme.of(
+                                                context,
+                                              ).dividerColor,
+                                            ),
+                                          )
+                                        : null,
+                                  ),
+                                  child: IntrinsicHeight(
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        // Day label column with notes
+                                        GestureDetector(
+                                          onTap: () =>
+                                              _showNoteDialog(context, day),
+                                          child: Container(
+                                            width: dayColumnWidth,
+                                            padding: const EdgeInsets.all(8),
+                                            decoration: BoxDecoration(
+                                              border: Border(
+                                                right: BorderSide(
+                                                  color: Theme.of(
+                                                    context,
+                                                  ).dividerColor,
+                                                  width: 2,
+                                                ),
+                                              ),
+                                              color: isWeekend
+                                                  ? Theme.of(context)
+                                                        .colorScheme
+                                                        .primaryContainer
+                                                        .withAlpha(51)
+                                                  : !isCurrentMonth
+                                                  ? Theme.of(context)
+                                                        .colorScheme
+                                                        .surfaceContainerHighest
+                                                        .withAlpha(25)
+                                                  : null,
+                                            ),
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
+                                              children: [
+                                                Row(
+                                                  children: [
+                                                    Text(
+                                                      dayName,
+                                                      style: const TextStyle(
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        fontSize: 14,
+                                                      ),
                                                     ),
-                                                  ),
-                                                  const Spacer(),
-                                                  if (_hasNoteForDay(day))
-                                                    const Icon(Icons.note, size: 14, color: Colors.amber),
-                                                ],
-                                              ),
-                                              Text(
-                                                '${day.month}/${day.day}',
-                                                style: TextStyle(
-                                                  fontSize: 12,
-                                                  color: !isCurrentMonth
-                                                      ? Colors.grey
-                                                      : day.day == DateTime.now().day &&
-                                                              day.month == DateTime.now().month &&
-                                                              day.year == DateTime.now().year
-                                                          ? Theme.of(context).colorScheme.primary
-                                                          : null,
+                                                    const Spacer(),
+                                                    if (_hasNoteForDay(day))
+                                                      const Icon(
+                                                        Icons.note,
+                                                        size: 14,
+                                                        color: Colors.amber,
+                                                      ),
+                                                  ],
                                                 ),
-                                              ),
-                                              if (_hasNoteForDay(day))
                                                 Text(
-                                                  _getNoteForDay(day),
-                                                  style: const TextStyle(fontSize: 9, color: Colors.amber),
-                                                  maxLines: 1,
-                                                  overflow: TextOverflow.ellipsis,
+                                                  '${day.month}/${day.day}',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: !isCurrentMonth
+                                                        ? Colors.grey
+                                                        : day.day ==
+                                                                  DateTime.now()
+                                                                      .day &&
+                                                              day.month ==
+                                                                  DateTime.now()
+                                                                      .month &&
+                                                              day.year ==
+                                                                  DateTime.now()
+                                                                      .year
+                                                        ? Theme.of(
+                                                            context,
+                                                          ).colorScheme.primary
+                                                        : null,
+                                                  ),
                                                 ),
-                                            ],
+                                                if (_hasNoteForDay(day))
+                                                  Text(
+                                                    _getNoteForDay(day),
+                                                    style: const TextStyle(
+                                                      fontSize: 9,
+                                                      color: Colors.amber,
+                                                    ),
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                  ),
+                                              ],
+                                            ),
                                           ),
                                         ),
-                                      ),
 
-                                      // Employee cells for this day
-                                      ...widget.employees.asMap().entries.expand((entry) {
-                                        final i = entry.key;
-                                        final employee = entry.value;
-                                        final widgets = <Widget>[];
+                                        // Employee cells for this day
+                                        ...widget.employees
+                                            .asMap()
+                                            .entries
+                                            .expand((entry) {
+                                              final i = entry.key;
+                                              final employee = entry.value;
+                                              final widgets = <Widget>[];
 
-                                        if (i > 0) {
-                                          final prevJob = widget.employees[i - 1].jobCode.toLowerCase();
-                                          final currJob = employee.jobCode.toLowerCase();
-                                          if (prevJob != currJob) {
-                                            widgets.add(SizedBox(width: groupGapWidth));
-                                          }
-                                        }
+                                              if (i > 0) {
+                                                final prevJob = widget
+                                                    .employees[i - 1]
+                                                    .jobCode
+                                                    .toLowerCase();
+                                                final currJob = employee.jobCode
+                                                    .toLowerCase();
+                                                if (prevJob != currJob) {
+                                                  widgets.add(
+                                                    SizedBox(
+                                                      width: groupGapWidth,
+                                                    ),
+                                                  );
+                                                }
+                                              }
 
-                                        widgets.add(
-                                          _buildMonthlyEmployeeCell(
-                                            context: context,
-                                            day: day,
-                                            isCurrentMonth: isCurrentMonth,
-                                            isWeekend: isWeekend,
-                                            employee: employee,
-                                            cellWidth: cellWidth,
-                                          ),
-                                        );
+                                              widgets.add(
+                                                _buildMonthlyEmployeeCell(
+                                                  context: context,
+                                                  day: day,
+                                                  isCurrentMonth:
+                                                      isCurrentMonth,
+                                                  isWeekend: isWeekend,
+                                                  employee: employee,
+                                                  cellWidth: cellWidth,
+                                                ),
+                                              );
 
-                                        return widgets;
-                                      }).toList(),
-                                    ],
+                                              return widgets;
+                                            })
+                                            .toList(),
+                                      ],
+                                    ),
                                   ),
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                        );
-                      },
+                                );
+                              }).toList(),
+                            ),
+                          );
+                        },
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
-        ),
         );
       },
     );
@@ -3707,7 +4565,7 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
 
 // Public simple shift placeholder for rendering
 class ShiftPlaceholder {
-  final int? id;  // Database ID (null for time-off entries)
+  final int? id; // Database ID (null for time-off entries)
   final int employeeId;
   final DateTime start;
   final DateTime end;
@@ -3732,6 +4590,6 @@ class ShiftPlaceholder {
   }
 
   @override
-  int get hashCode => id.hashCode ^ employeeId.hashCode ^ start.hashCode ^ end.hashCode;
+  int get hashCode =>
+      id.hashCode ^ employeeId.hashCode ^ start.hashCode ^ end.hashCode;
 }
-
