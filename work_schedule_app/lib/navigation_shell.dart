@@ -58,10 +58,15 @@ class _NavigationShellState extends State<NavigationShell> {
           } else {
             // Show snackbar that app is up to date with debug info
             final latestVersion = UpdateService.latestVersion ?? 'unknown';
+            final error = UpdateService.lastError;
+            String message = 'Current: v${UpdateService.currentVersion}, Latest: v$latestVersion';
+            if (error != null) {
+              message += ' | Error: $error';
+            }
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('You\'re up to date! Current: v${UpdateService.currentVersion}, Latest: v$latestVersion'),
-                duration: const Duration(seconds: 4),
+                content: Text(message),
+                duration: const Duration(seconds: 6),
               ),
             );
           }

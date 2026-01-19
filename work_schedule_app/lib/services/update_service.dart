@@ -12,7 +12,7 @@ class UpdateService {
   static const String _repo = 'Manager-Schedule-App';
   
   // Current app version (should match pubspec.yaml)
-  static const String currentVersion = '1.2.5';
+  static const String currentVersion = '1.2.6';
   
   /// Cached update info
   static String? _latestVersion;
@@ -33,7 +33,12 @@ class UpdateService {
   static String? get releaseNotes => _releaseNotes;
   
   /// Check GitHub releases for updates
+  /// Last error message if check failed
+  static String? _lastError;
+  static String? get lastError => _lastError;
+  
   static Future<bool> checkForUpdates() async {
+    _lastError = null;
     try {
       final url = Uri.parse(
         'https://api.github.com/repos/$_owner/$_repo/releases/latest'
@@ -84,14 +89,17 @@ class UpdateService {
       } else if (response.statusCode == 404) {
         // No releases yet
         debugPrint('UpdateService: No releases found');
+        _lastError = 'No releases found (404)';
         _hasChecked = true;
         return false;
       } else {
         debugPrint('UpdateService: Failed to check updates: ${response.statusCode}');
+        _lastError = 'HTTP ${response.statusCode}';
         return false;
       }
     } catch (e) {
       debugPrint('UpdateService: Error checking for updates: $e');
+      _lastError = e.toString();
       return false;
     }
   }
