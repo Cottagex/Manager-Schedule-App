@@ -16,7 +16,7 @@ void main() {
           date: date,
           employees: employees,
           shifts: [shift],
-          onUpdateShift: (old, ns, ne) {},
+          onUpdateShift: (old, ns, ne, {String? shiftNotes}) {},
         ),
       ),
     ));

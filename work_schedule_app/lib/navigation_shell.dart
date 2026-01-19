@@ -28,15 +28,6 @@ class _NavigationShellState extends State<NavigationShell> {
     SettingsPage(),
   ];
 
-  final List<String> _titles = const [
-    "Schedule",
-    "Time Off",
-    "Roster",
-    "PTO / VAC Tracker",
-    "Analytics",
-    "Settings",
-  ];
-
   @override
   void initState() {
     super.initState();

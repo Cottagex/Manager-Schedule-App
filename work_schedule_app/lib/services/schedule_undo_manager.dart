@@ -1,5 +1,6 @@
 import '../models/shift.dart';
 import '../models/schedule_note.dart';
+import '../models/shift_runner.dart';
 
 /// Base class for undoable schedule actions
 abstract class ScheduleAction {
@@ -68,11 +69,17 @@ class DeleteShiftAction extends ScheduleAction {
   final Shift shift;
   final Future<int> Function(Shift) insertFn;
   final Future<void> Function(int) deleteFn;
+  final ShiftRunner? deletedRunner;
+  final Future<void> Function(ShiftRunner)? upsertRunnerFn;
+  final Future<void> Function(DateTime, String)? deleteRunnerFn;
   
   DeleteShiftAction({
     required this.shift,
     required this.insertFn,
     required this.deleteFn,
+    this.deletedRunner,
+    this.upsertRunnerFn,
+    this.deleteRunnerFn,
   });
   
   @override
@@ -81,11 +88,19 @@ class DeleteShiftAction extends ScheduleAction {
   @override
   Future<void> execute() async {
     await deleteFn(shift.id!);
+    // Also delete the runner if one was assigned
+    if (deletedRunner != null && deleteRunnerFn != null) {
+      await deleteRunnerFn!(deletedRunner!.date, deletedRunner!.shiftType);
+    }
   }
   
   @override
   Future<void> undo() async {
     await insertFn(shift);
+    // Restore the runner if one was deleted
+    if (deletedRunner != null && upsertRunnerFn != null) {
+      await upsertRunnerFn!(deletedRunner!);
+    }
   }
 }
 

@@ -9,6 +9,18 @@ class EmployeeDao {
     return result.map((row) => Employee.fromMap(row)).toList();
   }
 
+  Future<Employee?> getById(int id) async {
+    final db = await AppDatabase.instance.db;
+    final result = await db.query(
+      'employees',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (result.isEmpty) return null;
+    return Employee.fromMap(result.first);
+  }
+
   Future<int> insertEmployee(Employee employee) async {
     final db = await AppDatabase.instance.db;
     return await db.insert(

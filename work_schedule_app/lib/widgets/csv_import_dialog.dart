@@ -21,7 +21,6 @@ class _CsvImportDialogState extends State<CsvImportDialog> {
   List<String> _parsedNames = [];
   int _currentIndex = 0;
   bool _isDragging = false;
-  bool _fileLoaded = false;
   bool _importing = false;
   int _importedCount = 0;
 
@@ -123,7 +122,6 @@ class _CsvImportDialogState extends State<CsvImportDialog> {
       setState(() {
         _parsedNames = names;
         _currentIndex = 0;
-        _fileLoaded = true;
         _importing = true;
       });
     } catch (e) {

@@ -8,17 +8,16 @@ import 'package:url_launcher/url_launcher.dart';
 /// Service to check for and download app updates from GitHub Releases
 class UpdateService {
   // GitHub repository info - update these for your repo
-  static const String _owner = 'Cottagex';
+  static const String _owner = 'JasonS1999';
   static const String _repo = 'Manager-Schedule-App';
   
   // Current app version (should match pubspec.yaml)
-  static const String currentVersion = '1.2.8';
+  static const String currentVersion = '1.2.9';
   
   /// Cached update info
   static String? _latestVersion;
   static String? _downloadUrl;
   static String? _releaseNotes;
-  static bool _hasChecked = false;
   
   /// Check if an update is available
   static bool get updateAvailable {
@@ -81,7 +80,6 @@ class UpdateService {
           }
         }
         
-        _hasChecked = true;
         debugPrint('UpdateService: Latest version: $_latestVersion, Current: $currentVersion');
         debugPrint('UpdateService: Download URL: $_downloadUrl');
         
@@ -90,7 +88,6 @@ class UpdateService {
         // No releases yet
         debugPrint('UpdateService: No releases found');
         _lastError = 'No releases found (404)';
-        _hasChecked = true;
         return false;
       } else {
         debugPrint('UpdateService: Failed to check updates: ${response.statusCode}');

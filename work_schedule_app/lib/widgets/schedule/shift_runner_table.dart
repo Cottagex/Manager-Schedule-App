@@ -13,8 +13,14 @@ import '../../models/employee.dart';
 class ShiftRunnerTable extends StatefulWidget {
   final DateTime weekStart;
   final VoidCallback? onChanged;
+  final int refreshKey;
 
-  const ShiftRunnerTable({super.key, required this.weekStart, this.onChanged});
+  const ShiftRunnerTable({
+    super.key,
+    required this.weekStart,
+    this.onChanged,
+    this.refreshKey = 0,
+  });
 
   @override
   State<ShiftRunnerTable> createState() => _ShiftRunnerTableState();
@@ -42,7 +48,8 @@ class _ShiftRunnerTableState extends State<ShiftRunnerTable> {
   @override
   void didUpdateWidget(ShiftRunnerTable oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.weekStart != widget.weekStart) {
+    if (oldWidget.weekStart != widget.weekStart || 
+        oldWidget.refreshKey != widget.refreshKey) {
       _loadData();
     }
   }
@@ -97,6 +104,7 @@ class _ShiftRunnerTableState extends State<ShiftRunnerTable> {
       day,
       startTime,
       endTime,
+      shiftType,
     );
 
     if (!mounted) return;
@@ -172,13 +180,28 @@ class _ShiftRunnerTableState extends State<ShiftRunnerTable> {
     DateTime day,
     String startTime,
     String endTime,
+    String currentShiftType, // The shift type being edited
   ) async {
     final availableList = <Employee>[];
     final timeOffList = await _timeOffDao.getAllTimeOff();
     final dateStr =
         '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
 
+    // Get all runners for this day to filter out people already running a different shift
+    final runnersForDay = _runners.where(
+      (r) =>
+          r.date.year == day.year &&
+          r.date.month == day.month &&
+          r.date.day == day.day,
+    ).toList();
+
     for (final employee in _employees) {
+      // Check if this employee is already running a different shift on this day
+      final alreadyRunning = runnersForDay.any(
+        (r) => r.runnerName == employee.name && r.shiftType != currentShiftType,
+      );
+      if (alreadyRunning) continue;
+
       // Check time-off
       final hasTimeOff = timeOffList.any(
         (t) =>
@@ -340,29 +363,59 @@ class _ShiftRunnerTableState extends State<ShiftRunnerTable> {
     final hasRunner = runner != null && runner.isNotEmpty;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return InkWell(
-      onTap: () => _editRunner(day, shiftType, runner),
-      child: Container(
-        padding: const EdgeInsets.all(3),
-        alignment: Alignment.center,
-        constraints: const BoxConstraints(minHeight: 38),
-        decoration: BoxDecoration(
-          color: hasRunner ? _getShiftColor(shiftType).withOpacity(0.1) : null,
-        ),
-        child: Text(
-          runner ?? '',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 13,
-            color: hasRunner 
-                ? (isDark ? Colors.white : Colors.black87)
-                : Colors.grey,
+    return GestureDetector(
+      onSecondaryTapDown: hasRunner
+          ? (details) => _showRunnerContextMenu(details.globalPosition, day, shiftType)
+          : null,
+      child: InkWell(
+        onTap: () => _editRunner(day, shiftType, runner),
+        child: Container(
+          padding: const EdgeInsets.all(3),
+          alignment: Alignment.center,
+          constraints: const BoxConstraints(minHeight: 38),
+          decoration: BoxDecoration(
+            color: hasRunner ? _getShiftColor(shiftType).withOpacity(0.1) : null,
           ),
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
+          child: Text(
+            runner ?? '',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              color: hasRunner 
+                  ? (isDark ? Colors.white : Colors.black87)
+                  : Colors.grey,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
       ),
     );
+  }
+
+  Future<void> _showRunnerContextMenu(Offset position, DateTime day, String shiftType) async {
+    final result = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy),
+      items: [
+        const PopupMenuItem<String>(
+          value: 'clear',
+          child: Row(
+            children: [
+              Icon(Icons.clear, size: 18, color: Colors.red),
+              SizedBox(width: 8),
+              Text('Clear Runner', style: TextStyle(color: Colors.red)),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    if (result == 'clear') {
+      await _dao.clear(day, shiftType);
+      await _loadData();
+      widget.onChanged?.call();
+    }
   }
 
   Color _getShiftColor(String shiftType) {

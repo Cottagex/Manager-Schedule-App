@@ -763,13 +763,6 @@ class SchedulePdfService {
     });
     return list;
   }
-  
-  /// Helper to determine which "super group" a job code belongs to
-  /// Returns the group name if in a group, or the job code itself if ungrouped
-  static String _getGroupKey(String jobCode, Map<String, String?> groupByCode) {
-    final group = groupByCode[jobCode.toLowerCase()];
-    return group ?? '__ungrouped__$jobCode';
-  }
 
   static bool _isLabelOnly(String text) {
     final t = text.toLowerCase();
@@ -818,11 +811,6 @@ class SchedulePdfService {
       'November',
       'December',
     ];
-    final headerStyle = pw.TextStyle(
-      fontWeight: pw.FontWeight.bold,
-      fontSize: 7,
-      color: PdfColors.white,
-    );
     final headerStyleDark = pw.TextStyle(
       fontWeight: pw.FontWeight.bold,
       fontSize: 7,
@@ -1279,24 +1267,6 @@ class SchedulePdfService {
       defaultVerticalAlignment: pw.TableCellVerticalAlignment.middle,
       children: rows,
     );
-  }
-
-  static String _monthNameShort(int month) {
-    const names = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ];
-    return names[month - 1];
   }
 
   static bool _isLightColor(PdfColor color) {

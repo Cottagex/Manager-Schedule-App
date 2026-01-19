@@ -317,12 +317,50 @@ class _ScheduleViewState extends State<ScheduleView> {
   }
 
   Future<void> _deleteShiftWithUndo(Shift shift) async {
+    // Check if there's a runner assigned for this shift's employee, date, and shift type
+    ShiftRunner? deletedRunner;
+    
+    // Determine the shift type from the shift's start time
+    final shiftType = ShiftRunner.getShiftTypeForTime(
+      shift.startTime.hour,
+      shift.startTime.minute,
+    );
+    
+    if (shiftType != null) {
+      final shiftDate = DateTime(
+        shift.startTime.year,
+        shift.startTime.month,
+        shift.startTime.day,
+      );
+      
+      // Get the runner for this date and shift type
+      final runner = await _shiftRunnerDao.getForDateAndShift(shiftDate, shiftType);
+      
+      // Check if the runner is the employee being deleted
+      if (runner != null) {
+        final employee = await _employeeDao.getById(shift.employeeId);
+        if (employee != null && runner.runnerName == employee.name) {
+          deletedRunner = runner;
+        }
+      }
+    }
+    
     final action = DeleteShiftAction(
       shift: shift,
       insertFn: (s) => _shiftDao.insert(s),
       deleteFn: (id) => _shiftDao.delete(id),
+      deletedRunner: deletedRunner,
+      upsertRunnerFn: deletedRunner != null ? (r) => _shiftRunnerDao.upsert(r) : null,
+      deleteRunnerFn: deletedRunner != null ? (date, type) => _shiftRunnerDao.delete(date, type) : null,
     );
     await _undoManager.executeAction(action);
+    
+    // If a runner was deleted, trigger runner table refresh
+    if (deletedRunner != null) {
+      setState(() {
+        _shiftRunnerRefreshKey++;
+      });
+    }
   }
 
   Future<void> _moveShiftWithUndo(Shift oldShift, Shift newShift) async {
@@ -1161,6 +1199,12 @@ class _ScheduleViewState extends State<ScheduleView> {
               jobCodeSettings: _jobCodeSettings,
               clipboardAvailable: _clipboard != null,
               shiftRunnerRefreshKey: _shiftRunnerRefreshKey,
+              onShiftRunnerChanged: () {
+                setState(() {
+                  _shiftRunnerRefreshKey++;
+                });
+                _refreshShifts(); // Reload schedule in case a shift was auto-created
+              },
               onCopyShift: (s) {
                 setState(() {
                   _clipboard = {
@@ -1360,6 +1404,7 @@ class _ScheduleViewState extends State<ScheduleView> {
           // Shift Runner table on the right side
           ShiftRunnerTable(
             weekStart: normalizedWeekStart,
+            refreshKey: _shiftRunnerRefreshKey,
             onChanged: () async {
               await _refreshShifts();
               setState(() {
@@ -1379,6 +1424,12 @@ class _ScheduleViewState extends State<ScheduleView> {
       jobCodeSettings: _jobCodeSettings,
       clipboardAvailable: _clipboard != null,
       shiftRunnerRefreshKey: _shiftRunnerRefreshKey,
+      onShiftRunnerChanged: () {
+        setState(() {
+          _shiftRunnerRefreshKey++;
+        });
+        _refreshShifts(); // Reload schedule in case a shift was auto-created
+      },
       onCopyShift: (s) {
         setState(() {
           _clipboard = {
@@ -1694,6 +1745,7 @@ class WeeklyScheduleView extends StatefulWidget {
   onMoveShift;
   final void Function(DateTime day, String note)? onSaveNote;
   final void Function(DateTime day)? onDeleteNote;
+  final VoidCallback? onShiftRunnerChanged;
   final bool clipboardAvailable;
   final int shiftRunnerRefreshKey;
 
@@ -1710,6 +1762,7 @@ class WeeklyScheduleView extends StatefulWidget {
     this.onMoveShift,
     this.onSaveNote,
     this.onDeleteNote,
+    this.onShiftRunnerChanged,
     this.clipboardAvailable = false,
     this.shiftRunnerRefreshKey = 0,
   });
@@ -1729,7 +1782,6 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
   final EmployeeAvailabilityDao _availabilityDao = EmployeeAvailabilityDao();
   final TimeOffDao _timeOffDao = TimeOffDao();
   final ShiftTemplateDao _shiftTemplateDao = ShiftTemplateDao();
-  final JobCodeSettingsDao _jobCodeDao = JobCodeSettingsDao();
   final ShiftRunnerDao _shiftRunnerDao = ShiftRunnerDao();
   final ShiftTypeDao _shiftTypeDao = ShiftTypeDao();
   final Map<String, Map<String, dynamic>> _availabilityCache = {};
@@ -1828,12 +1880,6 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     int selEnd = 16;
     ShiftTemplate? selectedTemplate;
     String? selectedRunnerShift; // Track which shift runner button is selected
-
-    // Get the employee name for runner assignment
-    final employee = widget.employees.firstWhere(
-      (e) => e.id == employeeId,
-      orElse: () => widget.employees.first,
-    );
 
     return StatefulBuilder(
       builder: (context, setDialogState) {
@@ -2098,24 +2144,19 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
                 final newStart = _timeOfDayToDateTime(day, times[selStart]);
                 final newEnd = _timeOfDayToDateTime(day, times[selEnd]);
 
-                // Save shift runner if a shift was selected
-                if (selectedRunnerShift != null) {
-                  await _shiftRunnerDao.upsert(
-                    ShiftRunner(
-                      date: day,
-                      shiftType: selectedRunnerShift!,
-                      runnerName: employee.name,
-                    ),
-                  );
-                }
-
+                // Return the data including runner selection - runner will be saved by caller
                 if (!newEnd.isAfter(newStart)) {
-                  Navigator.pop(context, [
-                    newStart,
-                    newStart.add(const Duration(hours: 1)),
-                  ]);
+                  Navigator.pop(context, {
+                    'start': newStart,
+                    'end': newStart.add(const Duration(hours: 1)),
+                    'runnerShift': selectedRunnerShift,
+                  });
                 } else {
-                  Navigator.pop(context, [newStart, newEnd]);
+                  Navigator.pop(context, {
+                    'start': newStart,
+                    'end': newEnd,
+                    'runnerShift': selectedRunnerShift,
+                  });
                 }
               },
               child: const Text('Save'),
@@ -2708,15 +2749,17 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
 
                                             return Stack(
                                               children: [
-                                                // Shift runner indicator (left border)
+                                                // Shift runner fill background
                                                 if (runnerColor != null)
-                                                  Positioned(
-                                                    left: 0,
-                                                    top: 0,
-                                                    bottom: 0,
+                                                  Positioned.fill(
                                                     child: Container(
-                                                      width: 4,
-                                                      color: runnerColor,
+                                                      decoration: BoxDecoration(
+                                                        color: runnerColor.withOpacity(0.25),
+                                                        border: Border.all(
+                                                          color: runnerColor,
+                                                          width: 2,
+                                                        ),
+                                                      ),
                                                     ),
                                                   ),
                                                 // Main content
@@ -3065,7 +3108,7 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
 
     if (!context.mounted) return;
 
-    final res = await showDialog<List<DateTime>>(
+    final res = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (context) => _buildTemplateDialog(
         day: day,
@@ -3079,13 +3122,28 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     );
 
     if (res != null && widget.onUpdateShift != null) {
+      // Save shift runner if one was selected
+      final runnerShift = res['runnerShift'] as String?;
+      if (runnerShift != null) {
+        await _shiftRunnerDao.upsert(
+          ShiftRunner(
+            date: day,
+            shiftType: runnerShift,
+            runnerName: employee.name,
+          ),
+        );
+        // Trigger runner table refresh via callback
+        _loadShiftRunnerData();
+        widget.onShiftRunnerChanged?.call();
+      }
+
       final tempShift = ShiftPlaceholder(
         employeeId: employeeId,
         start: DateTime(day.year, day.month, day.day, 0, 0),
         end: DateTime(day.year, day.month, day.day, 0, 0),
         text: 'Shift',
       );
-      widget.onUpdateShift!(tempShift, res[0], res[1]);
+      widget.onUpdateShift!(tempShift, res['start'] as DateTime, res['end'] as DateTime);
     }
   }
 
@@ -3342,6 +3400,7 @@ class MonthlyScheduleView extends StatefulWidget {
   onMoveShift;
   final void Function(DateTime day, String note)? onSaveNote;
   final void Function(DateTime day)? onDeleteNote;
+  final VoidCallback? onShiftRunnerChanged;
   final bool clipboardAvailable;
   final int shiftRunnerRefreshKey;
 
@@ -3358,6 +3417,7 @@ class MonthlyScheduleView extends StatefulWidget {
     this.onMoveShift,
     this.onSaveNote,
     this.onDeleteNote,
+    this.onShiftRunnerChanged,
     this.clipboardAvailable = false,
     this.shiftRunnerRefreshKey = 0,
   });
@@ -3373,14 +3433,15 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
   int? _dragHoverEmployeeId;
   late final ScrollController _horizontalScrollController;
   final ShiftTemplateDao _shiftTemplateDao = ShiftTemplateDao();
-  final JobCodeSettingsDao _jobCodeDao = JobCodeSettingsDao();
   final TimeOffDao _timeOffDao = TimeOffDao();
   final EmployeeAvailabilityDao _availabilityDao = EmployeeAvailabilityDao();
   final ShiftRunnerDao _shiftRunnerDao = ShiftRunnerDao();
   final ShiftTypeDao _shiftTypeDao = ShiftTypeDao();
+  final ShiftDao _shiftDao = ShiftDao();
   final Map<String, Map<String, dynamic>> _availabilityCache = {};
   List<ShiftType> _shiftTypes = [];
   List<ShiftRunner> _shiftRunners = [];
+  bool _isRunnerPanelExpanded = false; // Start collapsed
 
   @override
   void initState() {
@@ -3430,6 +3491,152 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
         _shiftTypes = shiftTypes;
         _shiftRunners = runners;
       });
+    }
+  }
+
+  Future<List<Employee>> _getAvailableEmployeesForRunner(
+    DateTime day,
+    String shiftType,
+  ) async {
+    final employeeDao = EmployeeDao();
+    final allEmployees = await employeeDao.getEmployees();
+    final availableList = <Employee>[];
+    final timeOffList = await _timeOffDao.getAllTimeOff();
+    final dateStr =
+        '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+
+    // Get shift type info for availability check
+    final shiftTypeObj = _shiftTypes.cast<ShiftType?>().firstWhere(
+      (st) => st?.key == shiftType,
+      orElse: () => null,
+    );
+    final startTime = shiftTypeObj?.defaultShiftStart ?? '09:00';
+    final endTime = shiftTypeObj?.defaultShiftEnd ?? '17:00';
+
+    // Get all runners for this day to filter out people already running a different shift
+    final runnersForDay = _shiftRunners.where(
+      (r) =>
+          r.date.year == day.year &&
+          r.date.month == day.month &&
+          r.date.day == day.day,
+    ).toList();
+
+    for (final employee in allEmployees) {
+      // Check if this employee is already running a different shift on this day
+      final alreadyRunning = runnersForDay.any(
+        (r) => r.runnerName == employee.name && r.shiftType != shiftType,
+      );
+      if (alreadyRunning) continue;
+
+      // Check time-off
+      final hasTimeOff = timeOffList.any(
+        (t) =>
+            t.employeeId == employee.id &&
+            '${t.date.year}-${t.date.month.toString().padLeft(2, '0')}-${t.date.day.toString().padLeft(2, '0')}' ==
+                dateStr &&
+            t.isAllDay,
+      );
+      if (hasTimeOff) continue;
+
+      // Check availability pattern
+      final availability = await _availabilityDao.isAvailable(
+        employee.id!,
+        day,
+        startTime,
+        endTime,
+      );
+      if (availability['available'] == true) {
+        availableList.add(employee);
+      }
+    }
+
+    return availableList;
+  }
+
+  Future<void> _editMonthlyRunner(DateTime day, String shiftType, String? currentRunner) async {
+    // Get shift type info
+    final shiftTypeObj = _shiftTypes.cast<ShiftType?>().firstWhere(
+      (st) => st?.key == shiftType,
+      orElse: () => null,
+    );
+    final startTime = shiftTypeObj?.defaultShiftStart ?? '09:00';
+    final endTime = shiftTypeObj?.defaultShiftEnd ?? '17:00';
+
+    // Load available employees for this shift
+    final availableEmployees = await _getAvailableEmployeesForRunner(day, shiftType);
+
+    if (!mounted) return;
+
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (ctx) {
+        return _MonthlyRunnerSearchDialog(
+          day: day,
+          shiftType: shiftType,
+          currentName: currentRunner,
+          availableEmployees: availableEmployees,
+          shiftColor: _getShiftTypeColor(shiftType),
+          startTime: startTime,
+          endTime: endTime,
+        );
+      },
+    );
+
+    if (result != null) {
+      if (result.isEmpty) {
+        // Clear the runner
+        await _shiftRunnerDao.delete(day, shiftType);
+      } else {
+        // Find the employee by name
+        final employee = widget.employees.cast<Employee?>().firstWhere(
+          (e) => e?.name == result,
+          orElse: () => null,
+        );
+        
+        // Create shift with default times if employee doesn't have a shift for this day
+        if (employee != null) {
+          final existingShifts = await _shiftDao.getByEmployeeAndDateRange(
+            employee.id!,
+            day,
+            day.add(const Duration(days: 1)),
+          );
+          
+          if (existingShifts.isEmpty) {
+            // Parse the default shift times
+            final startParts = startTime.split(':');
+            final endParts = endTime.split(':');
+            final shiftStart = DateTime(
+              day.year, day.month, day.day,
+              int.parse(startParts[0]), int.parse(startParts[1]),
+            );
+            var shiftEnd = DateTime(
+              day.year, day.month, day.day,
+              int.parse(endParts[0]), int.parse(endParts[1]),
+            );
+            // Handle overnight shifts (end time before start time)
+            if (shiftEnd.isBefore(shiftStart) || shiftEnd.isAtSameMomentAs(shiftStart)) {
+              shiftEnd = shiftEnd.add(const Duration(days: 1));
+            }
+            
+            await _shiftDao.insert(Shift(
+              employeeId: employee.id!,
+              startTime: shiftStart,
+              endTime: shiftEnd,
+            ));
+          }
+        }
+        
+        // Set the runner
+        await _shiftRunnerDao.upsert(
+          ShiftRunner(
+            date: day,
+            shiftType: shiftType,
+            runnerName: result,
+          ),
+        );
+      }
+      await _loadShiftRunnerData();
+      widget.onShiftRunnerChanged?.call();
     }
   }
 
@@ -4170,13 +4377,15 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
       decoration: BoxDecoration(
         color: isSelected
             ? Colors.blue.withAlpha(128)
-            : Theme.of(context).colorScheme.primaryContainer.withAlpha(128),
+            : runnerColor != null
+                ? runnerColor.withOpacity(0.25)
+                : Theme.of(context).colorScheme.primaryContainer.withAlpha(128),
         borderRadius: BorderRadius.circular(4),
         border: isSelected
             ? Border.all(color: Colors.blue, width: 2)
             : runnerColor != null
-            ? Border(left: BorderSide(color: runnerColor, width: 4))
-            : null,
+                ? Border.all(color: runnerColor, width: 2)
+                : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -4458,133 +4667,425 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
       return colorFromHex(hex);
     }
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final dayColumnWidth = 120.0;
-        const groupGapWidth = 12.0;
-        const tablePadding = 40.0; // Extra padding to prevent edge overhang
-
-        int jobCodeBreaks = 0;
-        for (int i = 1; i < widget.employees.length; i++) {
-          final prev = widget.employees[i - 1].jobCode.toLowerCase();
-          final curr = widget.employees[i].jobCode.toLowerCase();
-          if (prev != curr) jobCodeBreaks++;
+    // Build the runner panel for all weeks in the month (unified table)
+    Widget buildRunnerPanel() {
+      // Get all days visible in this month view, grouped by week
+      final allWeeks = <List<DateTime>>[];
+      for (final week in weeks) {
+        final weekDays = <DateTime>[];
+        for (final day in week) {
+          if (day != null) {
+            weekDays.add(day);
+          }
         }
+        if (weekDays.isNotEmpty) {
+          allWeeks.add(weekDays);
+        }
+      }
+      
+      final shiftTypeKeys = _shiftTypes.map((t) => t.key).toList();
 
-        final availableWidth =
-            constraints.maxWidth - dayColumnWidth - tablePadding;
-        final effectiveAvailableWidth =
-            (availableWidth - (jobCodeBreaks * groupGapWidth)).clamp(
-              0.0,
-              double.infinity,
-            );
-        final cellWidth = widget.employees.isNotEmpty
-            ? (effectiveAvailableWidth / widget.employees.length).clamp(
-                80.0,
-                200.0,
-              )
-            : 100.0;
+      String dayAbbr(int weekday) {
+        const abbrs = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        return abbrs[weekday % 7];
+      }
 
-        // Account for borders (2px on each side = 4px total)
-        final totalWidth =
-            dayColumnWidth +
-            (cellWidth * widget.employees.length) +
-            (jobCodeBreaks * groupGapWidth) +
-            4;
+      Color getShiftColor(String shiftType) {
+        final shiftTypeObj = _shiftTypes.cast<ShiftType?>().firstWhere(
+          (t) => t?.key == shiftType,
+          orElse: () => null,
+        );
+        final hex = shiftTypeObj?.colorHex ?? '#808080';
+        final cleanHex = hex.replaceFirst('#', '');
+        return Color(int.parse('FF$cleanHex', radix: 16));
+      }
 
-        List<Widget> buildEmployeeHeaderCells() {
-          final cells = <Widget>[];
-          for (int i = 0; i < widget.employees.length; i++) {
-            final employee = widget.employees[i];
+      String? getRunnerForCell(DateTime day, String shiftType) {
+        final runner = _shiftRunners.cast<ShiftRunner?>().firstWhere(
+          (r) =>
+              r != null &&
+              r.date.year == day.year &&
+              r.date.month == day.month &&
+              r.date.day == day.day &&
+              r.shiftType == shiftType,
+          orElse: () => null,
+        );
+        return runner?.runnerName;
+      }
 
-            if (i > 0) {
-              final prevJob = widget.employees[i - 1].jobCode.toLowerCase();
-              final currJob = employee.jobCode.toLowerCase();
-              if (prevJob != currJob) {
-                cells.add(Container(width: groupGapWidth, height: 60));
-              }
-            }
+      Widget buildHeaderCell(String text) {
+        return Container(
+          padding: const EdgeInsets.all(4),
+          alignment: Alignment.center,
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+          ),
+        );
+      }
 
-            final bg = jobCodeColorFor(employee.jobCode);
-            final fg =
-                ThemeData.estimateBrightnessForColor(bg) == Brightness.dark
-                ? Colors.white
-                : Colors.black;
+      Widget buildShiftHeader(String shiftType) {
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+          alignment: Alignment.center,
+          color: getShiftColor(shiftType).withOpacity(0.2),
+          child: Text(
+            ShiftRunner.getLabelForType(shiftType),
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 11,
+              color: getShiftColor(shiftType),
+            ),
+          ),
+        );
+      }
 
-            cells.add(
-              Container(
-                width: cellWidth,
-                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+      Widget buildDayCell(DateTime day) {
+        final isCurrentMonth = day.month == widget.date.month;
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+          alignment: Alignment.center,
+          color: isCurrentMonth 
+              ? Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3)
+              : Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.5),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                dayAbbr(day.weekday),
+                style: TextStyle(
+                  fontWeight: FontWeight.bold, 
+                  fontSize: 9,
+                  color: isCurrentMonth ? null : Colors.grey,
+                ),
+              ),
+              Text(
+                '${day.month}/${day.day}',
+                style: TextStyle(
+                  fontWeight: FontWeight.w500, 
+                  fontSize: 9,
+                  color: isCurrentMonth ? null : Colors.grey,
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+
+      Future<void> showRunnerContextMenu(Offset position, DateTime day, String shiftType) async {
+        final result = await showMenu<String>(
+          context: context,
+          position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy),
+          items: [
+            const PopupMenuItem<String>(
+              value: 'clear',
+              child: Row(
+                children: [
+                  Icon(Icons.clear, size: 18, color: Colors.red),
+                  SizedBox(width: 8),
+                  Text('Clear Runner', style: TextStyle(color: Colors.red)),
+                ],
+              ),
+            ),
+          ],
+        );
+
+        if (result == 'clear') {
+          await _shiftRunnerDao.delete(day, shiftType);
+          await _loadShiftRunnerData();
+          widget.onShiftRunnerChanged?.call();
+        }
+      }
+
+      Widget buildRunnerCell(DateTime day, String shiftType, String? runner) {
+        final hasRunner = runner != null && runner.isNotEmpty;
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+
+        return GestureDetector(
+          onSecondaryTapDown: hasRunner
+              ? (details) => showRunnerContextMenu(details.globalPosition, day, shiftType)
+              : null,
+          child: InkWell(
+            onTap: () => _editMonthlyRunner(day, shiftType, runner),
+            child: Container(
+              padding: const EdgeInsets.all(2),
+              alignment: Alignment.center,
+              constraints: const BoxConstraints(minHeight: 28),
+              decoration: BoxDecoration(
+                color: hasRunner ? getShiftColor(shiftType).withOpacity(0.1) : null,
+              ),
+              child: Text(
+                runner ?? '',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 10,
+                  color: hasRunner 
+                      ? (isDark ? Colors.white : Colors.black87)
+                      : Colors.grey,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
+        );
+      }
+
+      // Build table rows for a single week with thick border
+      Widget buildWeekTable(List<DateTime> weekDays, bool isFirst) {
+        return Container(
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: Theme.of(context).colorScheme.primary.withOpacity(0.5),
+              width: 2,
+            ),
+          ),
+          margin: EdgeInsets.only(top: isFirst ? 0 : 4),
+          child: Table(
+            defaultColumnWidth: const FixedColumnWidth(55),
+            columnWidths: const {
+              0: FixedColumnWidth(45), // Day column (narrower now with stacked layout)
+            },
+            border: TableBorder.all(color: Colors.grey.shade300, width: 1),
+            children: weekDays.map((day) {
+              return TableRow(
+                children: [
+                  buildDayCell(day),
+                  ...shiftTypeKeys.map((shiftType) {
+                    final runner = getRunnerForCell(day, shiftType);
+                    return buildRunnerCell(day, shiftType, runner);
+                  }),
+                ],
+              );
+            }).toList(),
+          ),
+        );
+      }
+
+      return Container(
+        width: _isRunnerPanelExpanded ? 320 : 40,
+        decoration: BoxDecoration(
+          border: Border(
+            left: BorderSide(color: Theme.of(context).dividerColor),
+          ),
+        ),
+        child: Column(
+          children: [
+            // Header with toggle button
+            InkWell(
+              onTap: () {
+                setState(() {
+                  _isRunnerPanelExpanded = !_isRunnerPanelExpanded;
+                });
+              },
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
                 decoration: BoxDecoration(
-                  color: bg,
+                  color: Theme.of(context).colorScheme.primaryContainer,
                   border: Border(
-                    left: BorderSide(color: Theme.of(context).dividerColor),
+                    bottom: BorderSide(color: Theme.of(context).dividerColor),
                   ),
                 ),
-                child: Center(
-                  child: Text(
-                    employee.name,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: fg,
+                child: Row(
+                  mainAxisAlignment: _isRunnerPanelExpanded
+                      ? MainAxisAlignment.spaceBetween
+                      : MainAxisAlignment.center,
+                  children: [
+                    if (_isRunnerPanelExpanded)
+                      const Text(
+                        'Shift Runners',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                    Icon(
+                      _isRunnerPanelExpanded
+                          ? Icons.chevron_right
+                          : Icons.chevron_left,
+                      size: 20,
                     ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
+                  ],
+                ),
+              ),
+            ),
+            // Column headers for shift types
+            if (_isRunnerPanelExpanded)
+              Padding(
+                padding: const EdgeInsets.only(left: 4, right: 4, top: 4),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.5),
+                    border: Border.all(
+                      color: Theme.of(context).colorScheme.primary.withOpacity(0.5),
+                      width: 2,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(width: 45, child: buildHeaderCell('')), // Match day column width
+                      ...shiftTypeKeys.map((shiftType) => SizedBox(
+                        width: 55, // Match table column width
+                        child: buildShiftHeader(shiftType),
+                      )),
+                    ],
                   ),
                 ),
               ),
-            );
-          }
-          return cells;
-        }
+            // Weekly tables with thick borders
+            if (_isRunnerPanelExpanded)
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(4),
+                  child: Column(
+                    children: [
+                      for (int i = 0; i < allWeeks.length; i++)
+                        buildWeekTable(allWeeks[i], i == 0),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
+    }
 
-        return Padding(
-          padding: const EdgeInsets.all(12),
-          child: Scrollbar(
-            controller: _horizontalScrollController,
-            thumbVisibility: true,
-            child: SingleChildScrollView(
-              controller: _horizontalScrollController,
-              scrollDirection: Axis.horizontal,
-              child: SizedBox(
-                width: totalWidth,
-                child: Column(
-                  children: [
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Main schedule
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final dayColumnWidth = 120.0;
+              const groupGapWidth = 12.0;
+              const tablePadding = 40.0; // Extra padding to prevent edge overhang
+
+              int jobCodeBreaks = 0;
+              for (int i = 1; i < widget.employees.length; i++) {
+                final prev = widget.employees[i - 1].jobCode.toLowerCase();
+                final curr = widget.employees[i].jobCode.toLowerCase();
+                if (prev != curr) jobCodeBreaks++;
+              }
+
+              final availableWidth =
+                  constraints.maxWidth - dayColumnWidth - tablePadding;
+              final effectiveAvailableWidth =
+                  (availableWidth - (jobCodeBreaks * groupGapWidth)).clamp(
+                    0.0,
+                    double.infinity,
+                  );
+              final cellWidth = widget.employees.isNotEmpty
+                  ? (effectiveAvailableWidth / widget.employees.length).clamp(
+                      80.0,
+                      200.0,
+                    )
+                  : 100.0;
+
+              // Account for borders (2px on each side = 4px total)
+              final totalWidth =
+                  dayColumnWidth +
+                  (cellWidth * widget.employees.length) +
+                  (jobCodeBreaks * groupGapWidth) +
+                  4;
+
+              List<Widget> buildEmployeeHeaderCells() {
+                final cells = <Widget>[];
+                for (int i = 0; i < widget.employees.length; i++) {
+                  final employee = widget.employees[i];
+
+                  if (i > 0) {
+                    final prevJob = widget.employees[i - 1].jobCode.toLowerCase();
+                    final currJob = employee.jobCode.toLowerCase();
+                    if (prevJob != currJob) {
+                      cells.add(Container(width: groupGapWidth, height: 60));
+                    }
+                  }
+
+                  final bg = jobCodeColorFor(employee.jobCode);
+                  final fg =
+                      ThemeData.estimateBrightnessForColor(bg) == Brightness.dark
+                      ? Colors.white
+                      : Colors.black;
+
+                  cells.add(
                     Container(
-                      width: totalWidth,
+                      width: cellWidth,
+                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
                       decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.primaryContainer,
-                        border: Border.all(
-                          color: Theme.of(context).dividerColor,
-                          width: 2,
+                        color: bg,
+                        border: Border(
+                          left: BorderSide(color: Theme.of(context).dividerColor),
                         ),
                       ),
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: dayColumnWidth,
-                            height: 60,
-                            child: const Center(
-                              child: Text(
-                                'Day',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14,
-                                ),
-                              ),
-                            ),
+                      child: Center(
+                        child: Text(
+                          employee.name,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: fg,
                           ),
-                          ...buildEmployeeHeaderCells(),
-                        ],
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    Expanded(
-                      child: ListView.builder(
-                        padding: EdgeInsets.zero,
-                        itemCount: weeks.length,
+                  );
+                }
+                return cells;
+              }
+
+              return Padding(
+                padding: const EdgeInsets.all(12),
+                child: Scrollbar(
+                  controller: _horizontalScrollController,
+                  thumbVisibility: true,
+                  child: SingleChildScrollView(
+                    controller: _horizontalScrollController,
+                    scrollDirection: Axis.horizontal,
+                    child: SizedBox(
+                      width: totalWidth,
+                      child: Column(
+                        children: [
+                          Container(
+                            width: totalWidth,
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.primaryContainer,
+                              border: Border.all(
+                                color: Theme.of(context).dividerColor,
+                                width: 2,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: dayColumnWidth,
+                                  height: 60,
+                                  child: const Center(
+                                    child: Text(
+                                      'Day',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                ...buildEmployeeHeaderCells(),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Expanded(
+                            child: ListView.builder(
+                              padding: EdgeInsets.zero,
+                              itemCount: weeks.length,
                         itemBuilder: (context, weekIndex) {
                           final week = weeks[weekIndex];
 
@@ -4777,7 +5278,12 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
             ),
           ),
         );
-      },
+            },
+          ),
+        ),
+        // Runner panel on the right
+        buildRunnerPanel(),
+      ],
     );
   }
 }
@@ -4813,4 +5319,221 @@ class ShiftPlaceholder {
   @override
   int get hashCode =>
       id.hashCode ^ employeeId.hashCode ^ start.hashCode ^ end.hashCode;
+}
+
+/// Dialog for selecting a shift runner in monthly view (same as weekly)
+class _MonthlyRunnerSearchDialog extends StatefulWidget {
+  final DateTime day;
+  final String shiftType;
+  final String? currentName;
+  final List<Employee> availableEmployees;
+  final Color shiftColor;
+  final String startTime;
+  final String endTime;
+
+  const _MonthlyRunnerSearchDialog({
+    required this.day,
+    required this.shiftType,
+    required this.currentName,
+    required this.availableEmployees,
+    required this.shiftColor,
+    required this.startTime,
+    required this.endTime,
+  });
+
+  @override
+  State<_MonthlyRunnerSearchDialog> createState() =>
+      _MonthlyRunnerSearchDialogState();
+}
+
+class _MonthlyRunnerSearchDialogState extends State<_MonthlyRunnerSearchDialog> {
+  late TextEditingController _searchController;
+  List<Employee> _filteredEmployees = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController = TextEditingController();
+    _filteredEmployees = widget.availableEmployees;
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _filterEmployees(String query) {
+    setState(() {
+      if (query.isEmpty) {
+        _filteredEmployees = widget.availableEmployees;
+      } else {
+        _filteredEmployees = widget.availableEmployees
+            .where(
+              (emp) => emp.name.toLowerCase().contains(query.toLowerCase()),
+            )
+            .toList();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Row(
+        children: [
+          Container(
+            width: 4,
+            height: 24,
+            decoration: BoxDecoration(
+              color: widget.shiftColor,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${ShiftRunner.getLabelForType(widget.shiftType)} Runner',
+                  style: const TextStyle(fontSize: 16),
+                ),
+                Text(
+                  '${widget.day.month}/${widget.day.day} • ${widget.startTime} - ${widget.endTime}',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 300,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Search bar
+            TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search employees...',
+                prefixIcon: const Icon(Icons.search, size: 20),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear, size: 18),
+                        onPressed: () {
+                          _searchController.clear();
+                          _filterEmployees('');
+                        },
+                      )
+                    : null,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                filled: true,
+                fillColor: Colors.grey[100],
+              ),
+              onChanged: _filterEmployees,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Available Employees (${_filteredEmployees.length})',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey[600],
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 8),
+            // Employee list
+            SizedBox(
+              height: 200,
+              child: _filteredEmployees.isEmpty
+                  ? Center(
+                      child: Text(
+                        _searchController.text.isEmpty
+                            ? 'No available employees for this shift'
+                            : 'No matching employees',
+                        style: TextStyle(color: Colors.grey[500], fontSize: 13),
+                      ),
+                    )
+                  : ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: _filteredEmployees.length,
+                      itemBuilder: (context, index) {
+                        final emp = _filteredEmployees[index];
+                        final isCurrentRunner = widget.currentName == emp.name;
+
+                        return ListTile(
+                          dense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          tileColor: isCurrentRunner
+                              ? widget.shiftColor.withOpacity(0.1)
+                              : null,
+                          leading: CircleAvatar(
+                            radius: 14,
+                            backgroundColor: widget.shiftColor.withOpacity(0.2),
+                            child: Text(
+                              emp.name.isNotEmpty
+                                  ? emp.name[0].toUpperCase()
+                                  : '?',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: widget.shiftColor,
+                              ),
+                            ),
+                          ),
+                          title: Text(
+                            emp.name,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: isCurrentRunner
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                          subtitle: Text(
+                            emp.jobCode,
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                          trailing: isCurrentRunner
+                              ? Icon(
+                                  Icons.check_circle,
+                                  size: 18,
+                                  color: widget.shiftColor,
+                                )
+                              : null,
+                          onTap: () => Navigator.pop(context, emp.name),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        if (widget.currentName != null && widget.currentName!.isNotEmpty)
+          TextButton(
+            onPressed: () => Navigator.pop(context, ''),
+            child: const Text('Clear', style: TextStyle(color: Colors.red)),
+          ),
+      ],
+    );
+  }
 }
