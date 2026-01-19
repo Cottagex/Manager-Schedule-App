@@ -45,21 +45,36 @@ class _NavigationShellState extends State<NavigationShell> {
 
   Future<void> _checkForUpdates({bool showDialogIfAvailable = false}) async {
     setState(() => _checkingUpdate = true);
-    final hasUpdate = await UpdateService.checkForUpdates();
-    if (mounted) {
-      setState(() {
-        _updateAvailable = hasUpdate;
-        _checkingUpdate = false;
-      });
-      if (showDialogIfAvailable) {
-        if (hasUpdate) {
-          _showUpdateDialog();
-        } else {
-          // Show snackbar that app is up to date
+    try {
+      final hasUpdate = await UpdateService.checkForUpdates();
+      if (mounted) {
+        setState(() {
+          _updateAvailable = hasUpdate;
+          _checkingUpdate = false;
+        });
+        if (showDialogIfAvailable) {
+          if (hasUpdate) {
+            _showUpdateDialog();
+          } else {
+            // Show snackbar that app is up to date
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('You\'re up to date! (v${UpdateService.currentVersion})'),
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _checkingUpdate = false);
+        if (showDialogIfAvailable) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('You\'re up to date! (v${UpdateService.currentVersion})'),
-              duration: const Duration(seconds: 2),
+              content: Text('Error checking for updates: $e'),
+              duration: const Duration(seconds: 4),
+              backgroundColor: Colors.red,
             ),
           );
         }
