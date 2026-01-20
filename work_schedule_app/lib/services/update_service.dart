@@ -12,7 +12,7 @@ class UpdateService {
   static const String _repo = 'Manager-Schedule-App';
 
   // Current app version (should match pubspec.yaml)
-  static const String currentVersion = '1.3.0';
+  static const String currentVersion = '1.3.1';
 
   /// Cached update info
   static String? _latestVersion;
@@ -122,13 +122,25 @@ class UpdateService {
         _latestVersion = tagName;
         _releaseNotes = data['body'] ?? '';
 
-        // Find the Windows zip asset
+        // Find the MSIX asset first (preferred for auto-install)
         final assets = data['assets'] as List<dynamic>? ?? [];
         for (final asset in assets) {
           final name = asset['name'] as String? ?? '';
-          if (name.endsWith('.zip') && name.toLowerCase().contains('windows')) {
+          if (name.endsWith('.msix')) {
             _downloadUrl = asset['browser_download_url'];
             break;
+          }
+        }
+
+        // Fallback to Windows zip if no MSIX found
+        if (_downloadUrl == null) {
+          for (final asset in assets) {
+            final name = asset['name'] as String? ?? '';
+            if (name.endsWith('.zip') &&
+                name.toLowerCase().contains('windows')) {
+              _downloadUrl = asset['browser_download_url'];
+              break;
+            }
           }
         }
 
@@ -164,6 +176,113 @@ class UpdateService {
     } catch (e) {
       debugPrint('UpdateService: Error checking for updates: $e');
       _lastError = e.toString();
+      return false;
+    }
+  }
+
+  /// Check if the update is an MSIX (auto-installable)
+  static bool get isMsixUpdate {
+    return _downloadUrl?.endsWith('.msix') ?? false;
+  }
+
+  /// Download MSIX and launch it for auto-install
+  /// Returns the path to the downloaded file, or null on error
+  static Future<String?> downloadAndInstallMsix({
+    required Function(double) onProgress,
+    required Function(String) onStatus,
+    required Function(String) onError,
+  }) async {
+    if (_downloadUrl == null) {
+      onError('No download URL available');
+      return null;
+    }
+
+    try {
+      onStatus('Downloading update...');
+
+      // Get temp folder for MSIX
+      final tempDir = Directory.systemTemp;
+      final fileName = 'ManagerScheduleApp_v$_latestVersion.msix';
+      final filePath = p.join(tempDir.path, fileName);
+
+      // Download the file with certificate handling
+      final downloadUri = Uri.parse(_downloadUrl!);
+
+      // Create HttpClient with certificate bypass for GitHub domains
+      final httpClient = HttpClient()
+        ..badCertificateCallback =
+            (X509Certificate cert, String host, int port) {
+              return host.contains('github') ||
+                  host.contains('githubusercontent') ||
+                  host.contains('objects.githubusercontent');
+            };
+
+      try {
+        final request = await httpClient.getUrl(downloadUri);
+        final response = await request.close();
+
+        if (response.statusCode != 200) {
+          if (response.statusCode >= 300 && response.statusCode < 400) {
+            onError('Redirect detected - please download manually');
+            return null;
+          }
+          onError('Download failed: ${response.statusCode}');
+          return null;
+        }
+
+        final contentLength = response.contentLength;
+        int received = 0;
+
+        final file = File(filePath);
+        final sink = file.openWrite();
+
+        await for (final chunk in response) {
+          sink.add(chunk);
+          received += chunk.length;
+          if (contentLength > 0) {
+            onProgress(received / contentLength);
+          }
+        }
+
+        await sink.close();
+        onStatus('Installing update...');
+        onProgress(1.0);
+
+        return filePath;
+      } finally {
+        httpClient.close();
+      }
+    } on HandshakeException catch (e) {
+      debugPrint('UpdateService: Download handshake error: $e');
+      onError('Certificate issue - please download manually from GitHub');
+      return null;
+    } catch (e) {
+      if (e.toString().contains('CERTIFICATE') ||
+          e.toString().contains('Handshake') ||
+          e.toString().contains('handshake')) {
+        onError('Certificate issue - please download manually from GitHub');
+        return null;
+      }
+      onError('Error downloading update: $e');
+      return null;
+    }
+  }
+
+  /// Launch the downloaded MSIX installer
+  static Future<bool> launchMsixInstaller(String msixPath) async {
+    try {
+      // Launch the MSIX file - Windows will handle the install
+      final uri = Uri.file(msixPath);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri);
+        return true;
+      } else {
+        // Fallback: use Process.run to open the file
+        await Process.run('cmd', ['/c', 'start', '', msixPath]);
+        return true;
+      }
+    } catch (e) {
+      debugPrint('UpdateService: Error launching MSIX: $e');
       return false;
     }
   }

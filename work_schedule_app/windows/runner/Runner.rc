@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "work_schedule_app" "\0"
+            VALUE "CompanyName", "Jason S" "\0"
+            VALUE "FileDescription", "Manager Schedule App" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "work_schedule_app" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"
+            VALUE "InternalName", "ManagerScheduleApp" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Jason S. All rights reserved." "\0"
             VALUE "OriginalFilename", "work_schedule_app.exe" "\0"
-            VALUE "ProductName", "work_schedule_app" "\0"
+            VALUE "ProductName", "Manager Schedule App" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

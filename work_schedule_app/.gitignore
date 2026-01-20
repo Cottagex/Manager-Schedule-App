@@ -45,3 +45,9 @@ app.*.map.json
 /android/app/release
 # Release zip files
 *.zip
+
+# Certificate private keys (DO NOT COMMIT)
+*.pfx
+
+# MSIX installer packages (upload to GitHub Releases instead)
+*.msix

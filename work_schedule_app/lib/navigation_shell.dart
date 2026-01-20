@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'pages/schedule_page.dart';
 import 'pages/time_off_page.dart';
@@ -50,12 +51,14 @@ class _NavigationShellState extends State<NavigationShell> {
             // Show snackbar with debug info
             final latestVersion = UpdateService.latestVersion ?? 'unknown';
             final error = UpdateService.lastError;
-            
+
             if (error != null && latestVersion == 'unknown') {
               // API failed - offer to open browser
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: const Text('Could not check for updates. Open releases page?'),
+                  content: const Text(
+                    'Could not check for updates. Open releases page?',
+                  ),
                   duration: const Duration(seconds: 6),
                   action: SnackBarAction(
                     label: 'Open',
@@ -66,7 +69,9 @@ class _NavigationShellState extends State<NavigationShell> {
             } else {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: Text('You\'re up to date! (v${UpdateService.currentVersion})'),
+                  content: Text(
+                    'You\'re up to date! (v${UpdateService.currentVersion})',
+                  ),
                   duration: const Duration(seconds: 2),
                 ),
               );
@@ -149,9 +154,7 @@ class _NavigationShellState extends State<NavigationShell> {
               ],
             ),
 
-          Expanded(
-            child: _pages[_index],
-          ),
+          Expanded(child: _pages[_index]),
         ],
       ),
 
@@ -224,7 +227,10 @@ class _NavigationShellState extends State<NavigationShell> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.green,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                 ),
               ),
             )
@@ -253,7 +259,7 @@ class _NavigationShellState extends State<NavigationShell> {
         ),
       );
     }
-    
+
     if (_updateAvailable) {
       return Container(
         width: double.infinity,
@@ -270,7 +276,7 @@ class _NavigationShellState extends State<NavigationShell> {
         ),
       );
     }
-    
+
     return const SizedBox.shrink();
   }
 }
@@ -296,52 +302,121 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   double _progress = 0;
   String _status = '';
   String? _error;
+  bool _installReady = false;
+  String? _msixPath;
 
-  void _startDownload() {
+  void _startDownload() async {
+    final isMsix = UpdateService.isMsixUpdate;
+
     setState(() {
       _downloading = true;
       _progress = 0;
       _status = 'Preparing download...';
       _error = null;
+      _installReady = false;
     });
 
-    UpdateService.downloadUpdate(
-      onProgress: (progress) {
-        if (mounted) {
-          setState(() => _progress = progress);
-        }
-      },
-      onStatus: (status) {
-        if (mounted) {
-          setState(() => _status = status);
-        }
-      },
-      onError: (error) {
-        if (mounted) {
-          setState(() {
-            _error = error;
-            _downloading = false;
-          });
-        }
-      },
-      onComplete: () {
-        if (mounted) {
-          setState(() {
-            _downloading = false;
-            _status = 'Download complete! Check your Downloads folder.';
-          });
-          // Show instructions
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Update downloaded! Close the app, extract the zip, and replace the old files.',
+    if (isMsix) {
+      // MSIX auto-install flow
+      final path = await UpdateService.downloadAndInstallMsix(
+        onProgress: (progress) {
+          if (mounted) {
+            setState(() => _progress = progress);
+          }
+        },
+        onStatus: (status) {
+          if (mounted) {
+            setState(() => _status = status);
+          }
+        },
+        onError: (error) {
+          if (mounted) {
+            setState(() {
+              _error = error;
+              _downloading = false;
+            });
+          }
+        },
+      );
+
+      if (mounted && path != null) {
+        setState(() {
+          _downloading = false;
+          _installReady = true;
+          _msixPath = path;
+          _status = 'Ready to install!';
+        });
+      }
+    } else {
+      // Legacy zip download flow
+      UpdateService.downloadUpdate(
+        onProgress: (progress) {
+          if (mounted) {
+            setState(() => _progress = progress);
+          }
+        },
+        onStatus: (status) {
+          if (mounted) {
+            setState(() => _status = status);
+          }
+        },
+        onError: (error) {
+          if (mounted) {
+            setState(() {
+              _error = error;
+              _downloading = false;
+            });
+          }
+        },
+        onComplete: () {
+          if (mounted) {
+            setState(() {
+              _downloading = false;
+              _status = 'Download complete! Check your Downloads folder.';
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Update downloaded! Close the app, extract the zip, and replace the old files.',
+                ),
+                duration: Duration(seconds: 8),
               ),
-              duration: Duration(seconds: 8),
-            ),
-          );
-        }
-      },
-    );
+            );
+          }
+        },
+      );
+    }
+  }
+
+  void _installUpdate() async {
+    if (_msixPath == null) return;
+
+    setState(() => _status = 'Launching installer...');
+
+    final launched = await UpdateService.launchMsixInstaller(_msixPath!);
+
+    if (launched) {
+      // Close the app so Windows can install the update
+      if (mounted) {
+        Navigator.of(context).pop();
+        // Show a brief message before exiting
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Installing update... The app will close.'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+        // Give time for snackbar to show, then exit
+        await Future.delayed(const Duration(seconds: 2));
+        exit(0);
+      }
+    } else {
+      if (mounted) {
+        setState(() {
+          _error = 'Could not launch installer. Please try manually.';
+        });
+      }
+    }
   }
 
   @override
@@ -372,29 +447,44 @@ class _UpdateDialogState extends State<_UpdateDialog> {
                 children: [
                   Column(
                     children: [
-                      const Text('Current', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                      Text('v${widget.currentVersion}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                      const Text(
+                        'Current',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                      Text(
+                        'v${widget.currentVersion}',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
                     ],
                   ),
                   const Icon(Icons.arrow_forward, color: Colors.grey),
                   Column(
                     children: [
-                      const Text('New', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                      const Text(
+                        'New',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
                       Text(
                         'v${widget.latestVersion}',
-                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green.shade700),
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.green.shade700,
+                        ),
                       ),
                     ],
                   ),
                 ],
               ),
             ),
-            
+
             const SizedBox(height: 16),
-            
+
             // Release notes
             if (widget.releaseNotes.isNotEmpty) ...[
-              const Text('What\'s New:', style: TextStyle(fontWeight: FontWeight.bold)),
+              const Text(
+                'What\'s New:',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
               const SizedBox(height: 8),
               Container(
                 constraints: const BoxConstraints(maxHeight: 150),
@@ -412,7 +502,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
               ),
               const SizedBox(height: 16),
             ],
-            
+
             // Progress indicator
             if (_downloading) ...[
               Text(_status, style: const TextStyle(fontSize: 13)),
@@ -424,7 +514,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
                 style: const TextStyle(fontSize: 12, color: Colors.grey),
               ),
             ],
-            
+
             // Error message
             if (_error != null)
               Container(
@@ -437,13 +527,18 @@ class _UpdateDialogState extends State<_UpdateDialog> {
                   children: [
                     const Icon(Icons.error, color: Colors.red, size: 20),
                     const SizedBox(width: 8),
-                    Expanded(child: Text(_error!, style: const TextStyle(color: Colors.red))),
+                    Expanded(
+                      child: Text(
+                        _error!,
+                        style: const TextStyle(color: Colors.red),
+                      ),
+                    ),
                   ],
                 ),
               ),
-            
-            // Success message
-            if (!_downloading && _status.contains('complete'))
+
+            // Success message - MSIX ready to install
+            if (_installReady)
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
@@ -455,9 +550,51 @@ class _UpdateDialogState extends State<_UpdateDialog> {
                   children: [
                     Row(
                       children: [
-                        Icon(Icons.check_circle, color: Colors.green.shade600, size: 20),
+                        Icon(
+                          Icons.check_circle,
+                          color: Colors.green.shade600,
+                          size: 20,
+                        ),
                         const SizedBox(width: 8),
-                        const Text('Download complete!', style: TextStyle(fontWeight: FontWeight.bold)),
+                        const Text(
+                          'Download complete!',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Click "Install Now" to update.\n'
+                      'The app will close and Windows will install the update.',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+
+            // Success message - ZIP download (legacy)
+            if (!_downloading && !_installReady && _status.contains('complete'))
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.green.shade50,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.check_circle,
+                          color: Colors.green.shade600,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'Download complete!',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 8),
@@ -480,12 +617,12 @@ class _UpdateDialogState extends State<_UpdateDialog> {
           onPressed: () => UpdateService.openReleasesPage(),
           child: const Text('View on GitHub'),
         ),
-        if (!_downloading && !_status.contains('complete'))
+        if (!_downloading && !_installReady && !_status.contains('complete'))
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Later'),
           ),
-        if (!_downloading && !_status.contains('complete'))
+        if (!_downloading && !_installReady && !_status.contains('complete'))
           ElevatedButton.icon(
             onPressed: _startDownload,
             icon: const Icon(Icons.download),
@@ -495,7 +632,19 @@ class _UpdateDialogState extends State<_UpdateDialog> {
               foregroundColor: Colors.white,
             ),
           ),
-        if (_status.contains('complete'))
+        // Install button for MSIX
+        if (_installReady)
+          ElevatedButton.icon(
+            onPressed: _installUpdate,
+            icon: const Icon(Icons.install_desktop),
+            label: const Text('Install Now'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+              foregroundColor: Colors.white,
+            ),
+          ),
+        // Close button for legacy ZIP download
+        if (!_installReady && _status.contains('complete'))
           ElevatedButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Close'),
