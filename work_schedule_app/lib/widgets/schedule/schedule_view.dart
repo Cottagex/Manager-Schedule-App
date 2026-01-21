@@ -38,7 +38,21 @@ enum ScheduleMode { weekly, monthly }
 
 bool _isLabelOnly(String text) {
   final t = text.toLowerCase();
-  return t == 'off' || t == 'pto' || t == 'vac' || t == 'req off';
+  // Only time-off system labels are non-editable (not manual "OFF")
+  return t == 'pto' || t == 'vac' || t == 'req off';
+}
+
+/// Check if a shift should display as a label instead of time range
+/// Returns true for time-off labels OR if it's an OFF shift (4AM-3:59AM)
+bool _shouldShowAsLabel(ShiftPlaceholder s) {
+  if (_isLabelOnly(s.text)) return true;
+  // Check for OFF shift format: 4:00 AM to 3:59 AM (next day)
+  final t = s.text.toLowerCase();
+  if (t == 'off') {
+    return (s.start.hour == 4 && s.start.minute == 0 &&
+            s.end.hour == 3 && s.end.minute == 59);
+  }
+  return false;
 }
 
 String _labelText(String text) {
@@ -116,25 +130,35 @@ class _ScheduleViewState extends State<ScheduleView> {
   }
 
   List<ShiftPlaceholder> _timeOffToShifts(List<TimeOffEntry> entries) {
-    return entries.map((e) {
-      String label;
-      switch (e.timeOffType.toLowerCase()) {
-        case 'vac':
-          label = 'VAC';
-          break;
-        case 'pto':
-          label = 'PTO';
-          break;
-        default:
-          label = 'REQ OFF';
-      }
-      return ShiftPlaceholder(
-        employeeId: e.employeeId,
-        start: DateTime(e.date.year, e.date.month, e.date.day, 0, 0),
-        end: DateTime(e.date.year, e.date.month, e.date.day, 23, 59),
-        text: label,
-      );
-    }).toList();
+    return entries
+        .where((e) {
+          // Skip partial day time off entries (sick/requested type with specific hours)
+          // These should not show "REQ OFF" in the cell - only show a warning in the dialog
+          if (e.timeOffType.toLowerCase() == 'sick' && !e.isAllDay) {
+            return false;
+          }
+          return true;
+        })
+        .map((e) {
+          String label;
+          switch (e.timeOffType.toLowerCase()) {
+            case 'vac':
+              label = 'VAC';
+              break;
+            case 'pto':
+              label = 'PTO';
+              break;
+            default:
+              label = 'REQ OFF';
+          }
+          return ShiftPlaceholder(
+            employeeId: e.employeeId,
+            start: DateTime(e.date.year, e.date.month, e.date.day, 0, 0),
+            end: DateTime(e.date.year, e.date.month, e.date.day, 23, 59),
+            text: label,
+          );
+        })
+        .toList();
   }
 
   List<ShiftPlaceholder> _shiftsToPlaceholders(List<Shift> shifts) {
@@ -418,6 +442,7 @@ class _ScheduleViewState extends State<ScheduleView> {
             jobCodeSettings: _jobCodeSettings,
             shiftRunners: shiftRunners,
             shiftTypes: shiftTypes,
+            storeHours: StoreHours.cached,
             storeName: StoreHours.cached.storeName,
             storeNsn: StoreHours.cached.storeNsn,
           );
@@ -462,6 +487,7 @@ class _ScheduleViewState extends State<ScheduleView> {
             jobCodeSettings: _jobCodeSettings,
             shiftRunners: shiftRunners,
             shiftTypes: shiftTypes,
+            storeHours: StoreHours.cached,
             storeName: StoreHours.cached.storeName,
             storeNsn: StoreHours.cached.storeNsn,
           );
@@ -1237,6 +1263,47 @@ class _ScheduleViewState extends State<ScheduleView> {
               },
               onUpdateShift:
                   (oldShift, newStart, newEnd, {String? shiftNotes}) async {
+                    // Handle "OFF" button - create an OFF label shift (4AM-3:59AM)
+                    if (shiftNotes == 'OFF') {
+                      // Calculate 4:00 AM start and 3:59 AM next day end
+                      final day = oldShift.id != null ? oldShift.start : newStart;
+                      final offStart = DateTime(day.year, day.month, day.day, 4, 0);
+                      final offEnd = DateTime(day.year, day.month, day.day, 3, 59).add(const Duration(days: 1));
+                      
+                      if (oldShift.id != null) {
+                        // Update existing shift to OFF
+                        final oldShiftModel = Shift(
+                          id: oldShift.id,
+                          employeeId: oldShift.employeeId,
+                          startTime: oldShift.start,
+                          endTime: oldShift.end,
+                          label: oldShift.text,
+                          notes: oldShift.notes,
+                        );
+                        final updated = Shift(
+                          id: oldShift.id,
+                          employeeId: oldShift.employeeId,
+                          startTime: offStart,
+                          endTime: offEnd,
+                          label: 'OFF',
+                          notes: null,
+                        );
+                        await _updateShiftWithUndo(oldShiftModel, updated);
+                      } else {
+                        // Create new OFF shift
+                        final newShift = Shift(
+                          employeeId: oldShift.employeeId,
+                          startTime: offStart,
+                          endTime: offEnd,
+                          label: 'OFF',
+                          notes: null,
+                        );
+                        await _insertShiftWithUndo(newShift);
+                      }
+                      await _refreshShifts();
+                      return;
+                    }
+
                     if (newStart == newEnd) {
                       // Delete with undo support
                       if (oldShift.id != null) {
@@ -1449,6 +1516,47 @@ class _ScheduleViewState extends State<ScheduleView> {
         await _refreshShifts();
       },
       onUpdateShift: (oldShift, newStart, newEnd, {String? shiftNotes}) async {
+        // Handle "OFF" button - create an OFF label shift (4AM-3:59AM)
+        if (shiftNotes == 'OFF') {
+          // Calculate 4:00 AM start and 3:59 AM next day end
+          final day = oldShift.id != null ? oldShift.start : newStart;
+          final offStart = DateTime(day.year, day.month, day.day, 4, 0);
+          final offEnd = DateTime(day.year, day.month, day.day, 3, 59).add(const Duration(days: 1));
+          
+          if (oldShift.id != null) {
+            // Update existing shift to OFF
+            final oldShiftModel = Shift(
+              id: oldShift.id,
+              employeeId: oldShift.employeeId,
+              startTime: oldShift.start,
+              endTime: oldShift.end,
+              label: oldShift.text,
+              notes: oldShift.notes,
+            );
+            final updated = Shift(
+              id: oldShift.id,
+              employeeId: oldShift.employeeId,
+              startTime: offStart,
+              endTime: offEnd,
+              label: 'OFF',
+              notes: null,
+            );
+            await _updateShiftWithUndo(oldShiftModel, updated);
+          } else {
+            // Create new OFF shift
+            final newShift = Shift(
+              employeeId: oldShift.employeeId,
+              startTime: offStart,
+              endTime: offEnd,
+              label: 'OFF',
+              notes: null,
+            );
+            await _insertShiftWithUndo(newShift);
+          }
+          await _refreshShifts();
+          return;
+        }
+
         if (newStart == newEnd) {
           // Delete with undo
           if (oldShift.id != null) {
@@ -1838,6 +1946,7 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     required String reason,
     required String type,
     required bool isAvailable,
+    TimeOffEntry? timeOffEntry,
   }) {
     final times = _allowedTimes();
     int selStart = 0;
@@ -1847,6 +1956,16 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
 
     return StatefulBuilder(
       builder: (context, setDialogState) {
+        // Helper to check if the selected shift times overlap with time off
+        bool shiftOverlapsTimeOff() {
+          if (timeOffEntry == null) return false;
+          final shiftStart = times[selStart];
+          final shiftEnd = times[selEnd];
+          final shiftStartDt = _timeOfDayToDateTime(day, shiftStart);
+          final shiftEndDt = _timeOfDayToDateTime(day, shiftEnd);
+          return timeOffEntry.overlapsWithShift(shiftStartDt, shiftEndDt);
+        }
+
         return AlertDialog(
           title: const Text('Add Shift'),
           content: Row(
@@ -2104,9 +2223,38 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
               child: const Text('Cancel'),
             ),
             TextButton(
+              onPressed: () => Navigator.pop(context, {'off': true}),
+              style: TextButton.styleFrom(foregroundColor: Colors.grey),
+              child: const Text('OFF'),
+            ),
+            TextButton(
               onPressed: () async {
                 final newStart = _timeOfDayToDateTime(day, times[selStart]);
                 final newEnd = _timeOfDayToDateTime(day, times[selEnd]);
+
+                // Check if shift overlaps with time off and confirm
+                if (shiftOverlapsTimeOff()) {
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Scheduling Conflict'),
+                      content: const Text(
+                        'The employee is not available for this time. Are you sure?',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('No'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text('Yes'),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirmed != true) return;
+                }
 
                 // Return the data including runner selection - runner will be saved by caller
                 if (!newEnd.isAfter(newStart)) {
@@ -2583,7 +2731,138 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
                                           s.employeeId &&
                                       _selectedShift!.start == s.start;
 
-                                  // Wrap in Draggable for drag & drop support
+                                  // Check if this is a time-off label (not editable/draggable)
+                                  final isTimeOffLabel = _isLabelOnly(s.text);
+
+                                  // Build the shift cell widget
+                                  Widget shiftCell = GestureDetector(
+                                    onTap: isTimeOffLabel
+                                        ? null
+                                        : () {
+                                            setState(() {
+                                              _selectedShift = s;
+                                              _selectedTargetDay = null;
+                                              _selectedTargetEmployeeId = null;
+                                            });
+                                          },
+                                    onDoubleTap: isTimeOffLabel
+                                        ? null
+                                        : () async {
+                                            final res = await _showEditDialog(
+                                              context,
+                                              d,
+                                              s,
+                                            );
+                                            if (res != null &&
+                                                widget.onUpdateShift != null) {
+                                              // Handle "OFF" button
+                                              if (res['off'] == true) {
+                                                widget.onUpdateShift!(
+                                                  s,
+                                                  s.start,
+                                                  s.start,
+                                                  shiftNotes: 'OFF',
+                                                );
+                                                return;
+                                              }
+                                              widget.onUpdateShift!(
+                                                s,
+                                                res['start'] as DateTime,
+                                                res['end'] as DateTime,
+                                                shiftNotes: res['notes'] as String?,
+                                              );
+                                            }
+                                          },
+                                    onLongPress: isTimeOffLabel
+                                        ? null
+                                        : () {
+                                            setState(() {
+                                              _selectedShift = s;
+                                              _selectedTargetDay = null;
+                                              _selectedTargetEmployeeId = null;
+                                            });
+                                            _showShiftContextMenu(context, s);
+                                          },
+                                    onSecondaryTapDown: isTimeOffLabel
+                                        ? null
+                                        : (details) {
+                                            setState(() {
+                                              _selectedShift = s;
+                                              _selectedTargetDay = null;
+                                              _selectedTargetEmployeeId = null;
+                                            });
+                                            _showShiftContextMenu(
+                                              context,
+                                              s,
+                                              position: details.globalPosition,
+                                            );
+                                          },
+                                    child: Container(
+                                      height: 60,
+                                      alignment: Alignment.center,
+                                      decoration: BoxDecoration(
+                                        border: Border.all(
+                                          color: Theme.of(
+                                            context,
+                                          ).dividerColor,
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: Builder(
+                                        builder: (context) {
+                                          // Check if this employee is a shift runner for this day
+                                          final runnerShiftType =
+                                              _getShiftRunnerTypeForEmployee(
+                                                d,
+                                                e.id!,
+                                              );
+                                          final runnerColor =
+                                              runnerShiftType != null
+                                              ? _getShiftTypeColor(
+                                                  runnerShiftType,
+                                                )
+                                              : null;
+                                          final isDark = Theme.of(context).brightness == Brightness.dark;
+
+                                          return Container(
+                                            decoration: BoxDecoration(
+                                              border: isShiftSelected && !isTimeOffLabel
+                                                  ? Border.all(color: Colors.blue, width: 2)
+                                                  : runnerColor != null
+                                                      ? Border.all(color: runnerColor, width: 1.5)
+                                                      : null,
+                                              color: isShiftSelected && !isTimeOffLabel
+                                                  ? Colors.blue.withAlpha(38)
+                                                  : runnerColor?.withOpacity(0.15),
+                                            ),
+                                            child: Center(
+                                              child: Text(
+                                                _shouldShowAsLabel(s)
+                                                    ? _labelText(s.text)
+                                                    : '$startLabel - $endLabel',
+                                                style: TextStyle(
+                                                  fontWeight:
+                                                      isShiftSelected && !isTimeOffLabel
+                                                      ? FontWeight.bold
+                                                      : FontWeight.normal,
+                                                  color: isDark
+                                                      ? Colors.white
+                                                      : Colors.black87,
+                                                  fontSize: 14,
+                                                ),
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    ),
+                                  );
+
+                                  // Only wrap in Draggable if not a time-off label
+                                  if (isTimeOffLabel) {
+                                    return shiftCell;
+                                  }
+
                                   return Draggable<ShiftPlaceholder>(
                                     data: s,
                                     feedback: Material(
@@ -2605,9 +2884,7 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
                                         ),
                                         child: Center(
                                           child: Text(
-                                            _isLabelOnly(s.text)
-                                                ? _labelText(s.text)
-                                                : '$startLabel - $endLabel',
+                                            '$startLabel - $endLabel',
                                             style: const TextStyle(
                                               fontSize: 12,
                                               fontWeight: FontWeight.bold,
@@ -2636,110 +2913,7 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
                                         ),
                                       ),
                                     ),
-                                    child: GestureDetector(
-                                      onTap: () {
-                                        setState(() {
-                                          _selectedShift = s;
-                                          _selectedTargetDay = null;
-                                          _selectedTargetEmployeeId = null;
-                                        });
-                                      },
-                                      onDoubleTap: () async {
-                                        final res = await _showEditDialog(
-                                          context,
-                                          d,
-                                          s,
-                                        );
-                                        if (res != null &&
-                                            widget.onUpdateShift != null) {
-                                          widget.onUpdateShift!(
-                                            s,
-                                            res['start'] as DateTime,
-                                            res['end'] as DateTime,
-                                            shiftNotes: res['notes'] as String?,
-                                          );
-                                        }
-                                      },
-                                      onLongPress: () {
-                                        setState(() {
-                                          _selectedShift = s;
-                                          _selectedTargetDay = null;
-                                          _selectedTargetEmployeeId = null;
-                                        });
-                                        _showShiftContextMenu(context, s);
-                                      },
-                                      onSecondaryTapDown: (details) {
-                                        setState(() {
-                                          _selectedShift = s;
-                                          _selectedTargetDay = null;
-                                          _selectedTargetEmployeeId = null;
-                                        });
-                                        _showShiftContextMenu(
-                                          context,
-                                          s,
-                                          position: details.globalPosition,
-                                        );
-                                      },
-                                      child: Container(
-                                        height: 60,
-                                        alignment: Alignment.center,
-                                        decoration: BoxDecoration(
-                                          border: Border.all(
-                                            color: Theme.of(
-                                              context,
-                                            ).dividerColor,
-                                            width: 1,
-                                          ),
-                                        ),
-                                        child: Builder(
-                                          builder: (context) {
-                                            // Check if this employee is a shift runner for this day
-                                            final runnerShiftType =
-                                                _getShiftRunnerTypeForEmployee(
-                                                  d,
-                                                  e.id!,
-                                                );
-                                            final runnerColor =
-                                                runnerShiftType != null
-                                                ? _getShiftTypeColor(
-                                                    runnerShiftType,
-                                                  )
-                                                : null;
-                                            final isDark = Theme.of(context).brightness == Brightness.dark;
-
-                                            return Container(
-                                              decoration: BoxDecoration(
-                                                border: isShiftSelected
-                                                    ? Border.all(color: Colors.blue, width: 2)
-                                                    : runnerColor != null
-                                                        ? Border.all(color: runnerColor, width: 1.5)
-                                                        : null,
-                                                color: isShiftSelected
-                                                    ? Colors.blue.withAlpha(38)
-                                                    : runnerColor?.withOpacity(0.15),
-                                              ),
-                                              child: Center(
-                                                child: Text(
-                                                  _isLabelOnly(s.text)
-                                                      ? _labelText(s.text)
-                                                      : '$startLabel - $endLabel',
-                                                  style: TextStyle(
-                                                    fontWeight:
-                                                        isShiftSelected
-                                                        ? FontWeight.bold
-                                                        : FontWeight.normal,
-                                                    color: isDark
-                                                        ? Colors.white
-                                                        : Colors.black87,
-                                                    fontSize: 14,
-                                                  ),
-                                                ),
-                                              ),
-                                            );
-                                          },
-                                        ),
-                                      ),
-                                    ),
+                                    child: shiftCell,
                                   );
                                 }).toList(),
                               ),
@@ -2855,19 +3029,19 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     if (!mounted || !context.mounted) return;
 
     if (result == 'off' && widget.onUpdateShift != null) {
-      // Create an OFF shift that spans from midnight to 11:59pm so it's a valid shift
+      // Create an OFF shift that spans from 4:00 AM to 3:59 AM next day
       final offShift = ShiftPlaceholder(
         employeeId: employeeId,
-        start: DateTime(day.year, day.month, day.day, 0, 0),
-        end: DateTime(day.year, day.month, day.day, 23, 59),
-        text: 'Off',
+        start: DateTime(day.year, day.month, day.day, 4, 0),
+        end: DateTime(day.year, day.month, day.day, 3, 59).add(const Duration(days: 1)),
+        text: 'OFF',
       );
-      // Use a temporary placeholder (start==end) to signal this is a new shift
+      // Use a temporary placeholder to signal this is a new shift
       final tempShift = ShiftPlaceholder(
         employeeId: employeeId,
-        start: DateTime(day.year, day.month, day.day, 0, 0),
-        end: DateTime(day.year, day.month, day.day, 0, 0),
-        text: 'Off',
+        start: DateTime(day.year, day.month, day.day, 4, 0),
+        end: DateTime(day.year, day.month, day.day, 4, 0),
+        text: 'OFF',
       );
       widget.onUpdateShift!(tempShift, offShift.start, offShift.end);
     }
@@ -3048,10 +3222,13 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
     final isAvailable = availability['available'] as bool;
     final reason = availability['reason'] as String;
     final type = availability['type'] as String;
+    final isAllDay = availability['isAllDay'] as bool? ?? true;
+    final timeOffEntry = availability['timeOffEntry'] as TimeOffEntry?;
 
     Color bannerColor = Colors.green;
     if (type == 'time-off') {
-      bannerColor = Colors.red;
+      // Red for all-day time off, orange (warning) for partial day
+      bannerColor = isAllDay ? Colors.red : Colors.orange;
     } else if (!isAvailable) {
       bannerColor = Colors.orange;
     }
@@ -3068,10 +3245,23 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
         reason: reason,
         type: type,
         isAvailable: isAvailable,
+        timeOffEntry: timeOffEntry,
       ),
     );
 
     if (res != null && widget.onUpdateShift != null) {
+      // Handle "OFF" button
+      if (res['off'] == true) {
+        final tempShift = ShiftPlaceholder(
+          employeeId: employeeId,
+          start: DateTime(day.year, day.month, day.day, 0, 0),
+          end: DateTime(day.year, day.month, day.day, 0, 0),
+          text: 'OFF',
+        );
+        widget.onUpdateShift!(tempShift, tempShift.start, tempShift.end, shiftNotes: 'OFF');
+        return;
+      }
+
       // Save shift runner if one was selected
       final runnerShift = res['runnerShift'] as String?;
       if (runnerShift != null) {
@@ -3128,6 +3318,20 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
       (e) => e.id == shift.employeeId,
       orElse: () => widget.employees.first,
     );
+
+    // Check for time off on this day
+    final availability = await _checkAvailability(shift.employeeId, day);
+    final timeOffEntry = availability['timeOffEntry'] as TimeOffEntry?;
+
+    // Helper to check if the selected shift times overlap with time off
+    bool shiftOverlapsTimeOff(int startIndex, int endIndex) {
+      if (timeOffEntry == null) return false;
+      final shiftStart = times[startIndex];
+      final shiftEnd = times[endIndex];
+      final shiftStartDt = _timeOfDayToDateTime(day, shiftStart);
+      final shiftEndDt = _timeOfDayToDateTime(day, shiftEnd);
+      return timeOffEntry.overlapsWithShift(shiftStartDt, shiftEndDt);
+    }
 
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -3287,7 +3491,36 @@ class _WeeklyScheduleViewState extends State<WeeklyScheduleView> {
                   child: const Text('Cancel'),
                 ),
                 TextButton(
+                  onPressed: () => Navigator.pop(context, {'off': true}),
+                  style: TextButton.styleFrom(foregroundColor: Colors.grey),
+                  child: const Text('OFF'),
+                ),
+                TextButton(
                   onPressed: () async {
+                    // Check if shift overlaps with time off and confirm
+                    if (shiftOverlapsTimeOff(selStart, selEnd)) {
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: const Text('Scheduling Conflict'),
+                          content: const Text(
+                            'The employee is not available for this time. Are you sure?',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, false),
+                              child: const Text('No'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, true),
+                              child: const Text('Yes'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirmed != true) return;
+                    }
+
                     // Save shift runner if selected
                     if (selectedRunnerShift != null) {
                       await _shiftRunnerDao.upsert(
@@ -3774,19 +4007,19 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
         ),
       );
     } else if (result == 'off' && widget.onUpdateShift != null) {
-      // Create an OFF shift that spans from midnight to 11:59pm
+      // Create an OFF shift that spans from 4:00 AM to 3:59 AM next day
       final offShift = ShiftPlaceholder(
         employeeId: employeeId,
-        start: DateTime(day.year, day.month, day.day, 0, 0),
-        end: DateTime(day.year, day.month, day.day, 23, 59),
-        text: 'Off',
+        start: DateTime(day.year, day.month, day.day, 4, 0),
+        end: DateTime(day.year, day.month, day.day, 3, 59).add(const Duration(days: 1)),
+        text: 'OFF',
       );
-      // Use a temporary placeholder (start==end) to signal this is a new shift
+      // Use a temporary placeholder to signal this is a new shift
       final tempShift = ShiftPlaceholder(
         employeeId: employeeId,
-        start: DateTime(day.year, day.month, day.day, 0, 0),
-        end: DateTime(day.year, day.month, day.day, 0, 0),
-        text: 'Off',
+        start: DateTime(day.year, day.month, day.day, 4, 0),
+        end: DateTime(day.year, day.month, day.day, 4, 0),
+        text: 'OFF',
       );
       widget.onUpdateShift!(tempShift, offShift.start, offShift.end);
     } else if (result == 'paste') {
@@ -3908,10 +4141,12 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     final isAvailable = availability['available'] as bool;
     final reason = availability['reason'] as String;
     final type = availability['type'] as String;
+    final timeOffEntry = availability['timeOffEntry'] as TimeOffEntry?;
 
     Color bannerColor = Colors.green;
     if (type == 'time-off') {
-      bannerColor = Colors.red;
+      final isAllDay = availability['isAllDay'] as bool? ?? true;
+      bannerColor = isAllDay ? Colors.red : Colors.orange;
     } else if (!isAvailable) {
       bannerColor = Colors.orange;
     }
@@ -3931,6 +4166,16 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     ShiftTemplate? selectedTemplate;
     String? selectedRunnerShift;
     final notesController = TextEditingController(text: shift.notes ?? '');
+
+    // Helper to check if the selected shift times overlap with time off
+    bool shiftOverlapsTimeOff(int startIndex, int endIndex) {
+      if (timeOffEntry == null) return false;
+      final shiftStart = times[startIndex];
+      final shiftEnd = times[endIndex];
+      final shiftStartDt = _timeOfDayToDateTime(day, shiftStart);
+      final shiftEndDt = _timeOfDayToDateTime(day, shiftEnd);
+      return timeOffEntry.overlapsWithShift(shiftStartDt, shiftEndDt);
+    }
 
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -4214,7 +4459,36 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
                   child: const Text('Cancel'),
                 ),
                 TextButton(
+                  onPressed: () => Navigator.pop(context, {'off': true}),
+                  style: TextButton.styleFrom(foregroundColor: Colors.grey),
+                  child: const Text('OFF'),
+                ),
+                TextButton(
                   onPressed: () async {
+                    // Check if shift overlaps with time off and confirm
+                    if (shiftOverlapsTimeOff(selStart, selEnd)) {
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: const Text('Scheduling Conflict'),
+                          content: const Text(
+                            'The employee is not available for this time. Are you sure?',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, false),
+                              child: const Text('No'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, true),
+                              child: const Text('Yes'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirmed != true) return;
+                    }
+
                     // Save shift runner if selected
                     if (selectedRunnerShift != null) {
                       await _shiftRunnerDao.upsert(
@@ -4256,6 +4530,17 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
     notesController.dispose();
 
     if (result != null && widget.onUpdateShift != null) {
+      // Handle "OFF" button
+      if (result['off'] == true) {
+        widget.onUpdateShift!(
+          shift,
+          shift.start,
+          shift.start,
+          shiftNotes: 'OFF',
+        );
+        return;
+      }
+
       widget.onUpdateShift!(
         shift,
         result['start'] as DateTime,
@@ -4336,7 +4621,7 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
         crossAxisAlignment: CrossAxisAlignment.center,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          if (_isLabelOnly(shift.text))
+          if (_shouldShowAsLabel(shift))
             Text(
               _labelText(shift.text),
               style: TextStyle(
@@ -4471,7 +4756,12 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
                       if (snapshot.hasData) {
                         final type = snapshot.data!['type'] as String;
                         final available = snapshot.data!['available'] as bool;
-                        if (type == 'time-off' || !available) {
+                        final isAllDay = snapshot.data!['isAllDay'] as bool? ?? true;
+                        // Only show dash for all-day time-off or unavailability
+                        // Partial day time-off should allow scheduling (with warning)
+                        if (type == 'time-off' && isAllDay) {
+                          showDash = true;
+                        } else if (type != 'time-off' && !available) {
                           showDash = true;
                         }
                       }
@@ -4513,6 +4803,52 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
                         dayOfWeek: day.weekday,
                       );
 
+                      // Check if this is a time-off label (not editable/draggable)
+                      final isTimeOffLabel = _isLabelOnly(shift.text);
+
+                      // Build the shift chip widget
+                      Widget shiftChip = GestureDetector(
+                        onTap: isTimeOffLabel
+                            ? null
+                            : () {
+                                setState(() {
+                                  _selectedShift = isSelected ? null : shift;
+                                });
+                              },
+                        onDoubleTap: isTimeOffLabel
+                            ? null
+                            : () {
+                                _showEditDialog(context, shift);
+                              },
+                        onSecondaryTapDown: isTimeOffLabel
+                            ? null
+                            : (details) {
+                                setState(() {
+                                  _selectedShift = shift;
+                                });
+                                _showShiftContextMenu(
+                                  context,
+                                  shift,
+                                  details.globalPosition,
+                                );
+                              },
+                        child: _buildShiftChip(
+                          shift,
+                          isSelected && !isTimeOffLabel,
+                          startLabel,
+                          endLabel,
+                          context,
+                        ),
+                      );
+
+                      // Only wrap in Draggable if not a time-off label
+                      if (isTimeOffLabel) {
+                        return SizedBox(
+                          height: 50,
+                          child: shiftChip,
+                        );
+                      }
+
                       return SizedBox(
                         height: 50,
                         child: Draggable<ShiftPlaceholder>(
@@ -4527,9 +4863,7 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
                               borderRadius: BorderRadius.circular(4),
                             ),
                             child: Text(
-                              _isLabelOnly(shift.text)
-                                  ? _labelText(shift.text)
-                                  : '$startLabel-$endLabel',
+                              '$startLabel-$endLabel',
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 10,
@@ -4547,33 +4881,7 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
                             context,
                           ),
                         ),
-                        child: GestureDetector(
-                          onTap: () {
-                            setState(() {
-                              _selectedShift = isSelected ? null : shift;
-                            });
-                          },
-                          onDoubleTap: () {
-                            _showEditDialog(context, shift);
-                          },
-                          onSecondaryTapDown: (details) {
-                            setState(() {
-                              _selectedShift = shift;
-                            });
-                            _showShiftContextMenu(
-                              context,
-                              shift,
-                              details.globalPosition,
-                            );
-                          },
-                          child: _buildShiftChip(
-                            shift,
-                            isSelected,
-                            startLabel,
-                            endLabel,
-                            context,
-                          ),
-                        ),
+                        child: shiftChip,
                       ),
                     );
                     }).toList(),

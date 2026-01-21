@@ -85,10 +85,20 @@ class TimeOffEntry {
     final startParts = startTime!.split(':');
     final endParts = endTime!.split(':');
     final timeOffStart = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
-    final timeOffEnd = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
+    int timeOffEnd = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
+    
+    // Handle midnight crossing - if end time is before or equal to start time, it crosses midnight
+    if (timeOffEnd <= timeOffStart) {
+      timeOffEnd += 24 * 60; // Add 24 hours worth of minutes
+    }
     
     final shiftStartMinutes = shiftStart.hour * 60 + shiftStart.minute;
-    final shiftEndMinutes = shiftEnd.hour * 60 + shiftEnd.minute;
+    int shiftEndMinutes = shiftEnd.hour * 60 + shiftEnd.minute;
+    
+    // Handle shift crossing midnight too
+    if (shiftEndMinutes <= shiftStartMinutes) {
+      shiftEndMinutes += 24 * 60;
+    }
     
     // Check for overlap
     return timeOffStart < shiftEndMinutes && timeOffEnd > shiftStartMinutes;

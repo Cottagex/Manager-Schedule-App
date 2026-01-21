@@ -7,9 +7,103 @@ import '../models/job_code_settings.dart';
 import '../models/shift_runner.dart';
 import '../models/shift_type.dart';
 import '../models/schedule_note.dart';
+import '../models/store_hours.dart';
 import '../widgets/schedule/schedule_view.dart';
 
 class SchedulePdfService {
+  // Mid shift patterns: (startHour, startMinute, endHour, endMinute)
+  static const List<(int, int, int, int)> _midShiftPatterns = [
+    (11, 0, 19, 0),  // 11-7
+    (12, 0, 20, 0),  // 12-8
+    (10, 0, 19, 0),  // 10-7
+    (11, 0, 20, 0),  // 11-8
+  ];
+
+  /// Check if a shift is an opening shift
+  static bool _isOpenShift(ShiftPlaceholder shift, StoreHours storeHours) {
+    final dayOfWeek = shift.start.weekday % 7; // Convert to 0=Sunday
+    final openTime = storeHours.getOpenTimeForDay(dayOfWeek == 0 ? DateTime.sunday : dayOfWeek);
+    final (openHour, openMinute) = StoreHours.parseTime(openTime);
+    return shift.start.hour == openHour && shift.start.minute == openMinute;
+  }
+
+  /// Check if a shift is a closing shift
+  static bool _isCloseShift(ShiftPlaceholder shift, StoreHours storeHours) {
+    final dayOfWeek = shift.start.weekday % 7;
+    final closeTime = storeHours.getCloseTimeForDay(dayOfWeek == 0 ? DateTime.sunday : dayOfWeek);
+    final (closeHour, closeMinute) = StoreHours.parseTime(closeTime);
+    return shift.end.hour == closeHour && shift.end.minute == closeMinute;
+  }
+
+  /// Check if a shift matches a mid shift pattern
+  static bool _isMidShift(ShiftPlaceholder shift) {
+    for (final (startH, startM, endH, endM) in _midShiftPatterns) {
+      if (shift.start.hour == startH &&
+          shift.start.minute == startM &&
+          shift.end.hour == endH &&
+          shift.end.minute == endM) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Get shift stats for an employee within a list of days
+  static Map<String, int> _getEmployeeShiftStats({
+    required int employeeId,
+    required List<DateTime> days,
+    required List<ShiftPlaceholder> shifts,
+    required StoreHours storeHours,
+  }) {
+    int opens = 0;
+    int closes = 0;
+    int mids = 0;
+    int vacPto = 0;
+    int total = 0;
+
+    for (final day in days) {
+      final dayShifts = shifts.where((s) =>
+        s.employeeId == employeeId &&
+        s.start.year == day.year &&
+        s.start.month == day.month &&
+        s.start.day == day.day
+      ).toList();
+
+      for (final shift in dayShifts) {
+        final label = shift.text.toLowerCase().trim();
+        
+        // Check for VAC/PTO
+        if (label == 'vac' || label == 'pto' || label == 'eto') {
+          vacPto++;
+          continue;
+        }
+        
+        // Skip other non-shift entries (OFF, REQ OFF, etc.)
+        if (_isLabelOnly(shift.text)) {
+          continue;
+        }
+        
+        total++;
+        
+        if (_isOpenShift(shift, storeHours)) {
+          opens++;
+        } else if (_isCloseShift(shift, storeHours)) {
+          closes++;
+        } else if (_isMidShift(shift)) {
+          mids++;
+        }
+      }
+    }
+
+    return {
+      'opens': opens,
+      'mids': mids,
+      'closes': closes,
+      'vacPto': vacPto,
+      'total': total,
+    };
+  }
+
   /// Build store info header for PDFs
   static pw.Widget _buildStoreHeader(String title, {String? storeName, String? storeNsn}) {
     // Build store info text inline
@@ -45,10 +139,12 @@ class SchedulePdfService {
     List<JobCodeSettings> jobCodeSettings = const [],
     List<ShiftRunner> shiftRunners = const [],
     List<ShiftType> shiftTypes = const [],
+    StoreHours? storeHours,
     String? storeName,
     String? storeNsn,
   }) async {
     final pdf = pw.Document();
+    final effectiveStoreHours = storeHours ?? StoreHours.defaults();
 
     // Calculate week end
     final weekEnd = weekStart.add(const Duration(days: 6));
@@ -101,10 +197,12 @@ class SchedulePdfService {
     List<JobCodeSettings> jobCodeSettings = const [],
     List<ShiftRunner> shiftRunners = const [],
     List<ShiftType> shiftTypes = const [],
+    StoreHours? storeHours,
     String? storeName,
     String? storeNsn,
   }) async {
     final pdf = pw.Document();
+    final effectiveStoreHours = storeHours ?? StoreHours.defaults();
 
     final monthNames = [
       'January',
@@ -155,16 +253,21 @@ class SchedulePdfService {
               child: pw.FittedBox(
                 fit: pw.BoxFit.contain,
                 alignment: pw.Alignment.topCenter,
-                child: pw.Column(
-                  crossAxisAlignment: pw.CrossAxisAlignment.start,
-                  children: _buildMonthlyStackedWeekWidgets(
-                    employees: sortedEmployees,
-                    weeks: weeks,
-                    targetMonth: month,
-                    shifts: shifts,
-                    shiftRunners: shiftRunners,
-                    shiftTypes: shiftTypes,
-                    jobCodeSettings: jobCodeSettings,
+                child: pw.Container(
+                  decoration: pw.BoxDecoration(
+                    border: pw.Border.all(color: PdfColors.black, width: 1.5),
+                  ),
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: _buildMonthlyStackedWeekWidgets(
+                      employees: sortedEmployees,
+                      weeks: weeks,
+                      targetMonth: month,
+                      shifts: shifts,
+                      shiftRunners: shiftRunners,
+                      shiftTypes: shiftTypes,
+                      jobCodeSettings: jobCodeSettings,
+                    ),
                   ),
                 ),
               ),
@@ -398,45 +501,52 @@ class SchedulePdfService {
       colWidths[2 + i] = const pw.FixedColumnWidth(60);
     }
 
-    final rows = <pw.TableRow>[];
-
-    // Header row - YELLOW background
+    // Header table - YELLOW background with no internal vertical borders
     final headerColor = PdfColor.fromHex('#FFEB3B'); // Material Yellow 500
-    rows.add(
-      pw.TableRow(
-        decoration: pw.BoxDecoration(color: headerColor),
-        children: [
-          _padCell(
-            pw.Text('Name', style: headerStyle),
-            align: pw.Alignment.centerLeft,
-            bgColor: headerColor,
-            border: pw.Border.all(color: PdfColors.black, width: 1),
-          ),
-          _padCell(
-            pw.Text('Position', style: headerStyle),
-            align: pw.Alignment.centerLeft,
-            bgColor: headerColor,
-            border: pw.Border.all(color: PdfColors.black, width: 1),
-          ),
-          ...List.generate(7, (i) {
-            final d = week[i];
-            final label = '${dayNames[i]} ${d.month}/${d.day}';
-            return _padCell(
-              pw.Text(label, style: headerStyle),
+    final headerTable = pw.Table(
+      columnWidths: colWidths,
+      border: pw.TableBorder(
+        left: const pw.BorderSide(color: PdfColors.black, width: 1.5),
+        right: const pw.BorderSide(color: PdfColors.black, width: 1.5),
+        top: const pw.BorderSide(color: PdfColors.black, width: 1.5),
+        bottom: const pw.BorderSide(color: PdfColors.black, width: 1.5),
+        // No verticalInside for header
+      ),
+      defaultVerticalAlignment: pw.TableCellVerticalAlignment.middle,
+      children: [
+        pw.TableRow(
+          decoration: pw.BoxDecoration(color: headerColor),
+          children: [
+            _padCell(
+              pw.Text('Name', style: headerStyle),
+              align: pw.Alignment.centerLeft,
+              bgColor: headerColor,
+            ),
+            _padCell(
+              pw.Text('Position', style: headerStyle),
+              align: pw.Alignment.centerLeft,
+              bgColor: headerColor,
+            ),
+            ...List.generate(7, (i) {
+              final d = week[i];
+              final label = '${dayNames[i]} ${d.month}/${d.day}';
+              return _padCell(
+                pw.Text(label, style: headerStyle),
+                align: pw.Alignment.center,
+                bgColor: headerColor,
+              );
+            }),
+            _padCell(
+              pw.Text('HRS', style: headerStyle),
               align: pw.Alignment.center,
               bgColor: headerColor,
-              border: pw.Border.all(color: PdfColors.black, width: 1),
-            );
-          }),
-          _padCell(
-            pw.Text('HRS', style: headerStyle),
-            align: pw.Alignment.center,
-            bgColor: headerColor,
-            border: pw.Border.all(color: PdfColors.black, width: 1),
-          ),
-        ],
-      ),
+            ),
+          ],
+        ),
+      ],
     );
+
+    final dataRows = <pw.TableRow>[];
 
     // Build job code group map for determining when to add spacers
     final jobCodeGroupMap = <String, String?>{};
@@ -457,10 +567,16 @@ class SchedulePdfService {
 
       // Only add spacer when the group changes (not just the job code)
       if (lastGroupKey != null && currentGroupKey != lastGroupKey) {
-        // Spacer row between groups
-        rows.add(
+        // Spacer row between groups - use Container with white background to hide table borders
+        dataRows.add(
           pw.TableRow(
-            children: List.generate(10, (_) => pw.SizedBox(height: 6)),
+            children: List.generate(
+              10,
+              (_) => pw.Container(
+                height: 6,
+                color: PdfColors.white,
+              ),
+            ),
           ),
         );
       }
@@ -472,19 +588,20 @@ class SchedulePdfService {
         shifts: shifts,
       );
 
-      rows.add(
+      dataRows.add(
         pw.TableRow(
           decoration: const pw.BoxDecoration(color: PdfColors.white),
           children: [
             _padCell(
-              pw.Text(emp.name, style: cellStyle),
+              pw.Text(emp.name, style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
               align: pw.Alignment.centerLeft,
             ),
             _padCell(
-              pw.Text(jobCode, style: cellStyle),
+              pw.Text(jobCode, style: pw.TextStyle(fontSize: 8, fontStyle: pw.FontStyle.italic, fontWeight: pw.FontWeight.bold)),
               align: pw.Alignment.centerLeft,
             ),
-            ...week.map((day) {
+            ...week.asMap().entries.map((entry) {
+              final day = entry.value;
               final dayText = _formatEmployeeDayCell(
                 employeeId: emp.id,
                 day: day,
@@ -514,7 +631,7 @@ class SchedulePdfService {
               );
             }),
             _padCell(
-              pw.Text(hours == 0 ? '' : hours.toString(), style: cellStyle),
+              pw.Text(hours == 0 ? '' : hours.toString(), style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
               align: pw.Alignment.center,
             ),
           ],
@@ -522,16 +639,26 @@ class SchedulePdfService {
       );
     }
 
-    return pw.Container(
-      decoration: pw.BoxDecoration(
-        border: pw.Border.all(color: PdfColors.black, width: 1.5),
+    // Data table with internal grid borders
+    final dataTable = pw.Table(
+      columnWidths: colWidths,
+      border: pw.TableBorder(
+        left: const pw.BorderSide(color: PdfColors.black, width: 1.5),
+        right: const pw.BorderSide(color: PdfColors.black, width: 1.5),
+        bottom: const pw.BorderSide(color: PdfColors.black, width: 1.5),
+        horizontalInside: const pw.BorderSide(color: PdfColors.grey400, width: 0.4),
+        verticalInside: const pw.BorderSide(color: PdfColors.grey400, width: 0.4),
       ),
-      child: pw.Table(
-        columnWidths: colWidths,
-        border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.4),
-        defaultVerticalAlignment: pw.TableCellVerticalAlignment.middle,
-        children: rows,
-      ),
+      defaultVerticalAlignment: pw.TableCellVerticalAlignment.middle,
+      children: dataRows,
+    );
+
+    // Return header and data tables stacked vertically
+    return pw.Column(
+      children: [
+        headerTable,
+        dataTable,
+      ],
     );
   }
 
@@ -1096,9 +1223,6 @@ class SchedulePdfService {
       } else if (day.weekday == 0) {
         // Sunday - light orange/peach
         dayBgColor = PdfColor.fromHex('#FFDAB9'); // Peach
-      } else if (day.weekday == 6) {
-        // Saturday - light yellow
-        dayBgColor = PdfColor.fromHex('#FFFFE0'); // Light yellow
       } else {
         dayBgColor = PdfColors.white;
       }
@@ -1175,6 +1299,7 @@ class SchedulePdfService {
           );
 
           if (runnerColor != null) {
+            // Only highlight cells if the employee is a shift runner
             cellBgColor = _lightenPdfColor(runnerColor, 0.4);
           } else if (isOutOfMonth) {
             cellBgColor = PdfColors.grey200;
@@ -1184,14 +1309,8 @@ class SchedulePdfService {
           String displayText = dayText;
           if (dayText.toUpperCase() == 'OFF') {
             displayText = '-';
-            // No color fill for OFF (keep white background)
-          } else if (dayText.toUpperCase() == 'VAC') {
-            cellBgColor = PdfColor.fromHex('#F4B183'); // Orange like Excel
-          } else if (dayText.toUpperCase() == 'PTO') {
-            cellBgColor = PdfColor.fromHex('#A9D08E'); // Light green
-          } else if (dayText.toUpperCase() == 'ETO') {
-            cellBgColor = PdfColor.fromHex('#D9D9D9'); // Light grey for ETO
           }
+          // Note: VAC, PTO, ETO no longer get color highlighting - only runners are highlighted
 
           // Build border with thick borders around each week's cells per super group
           // Thick left/right on super group edges, thick top on Sunday, thick bottom on Saturday
@@ -1284,5 +1403,144 @@ class SchedulePdfService {
   /// Share/save the PDF
   static Future<void> sharePdf(Uint8List pdfBytes, String filename) async {
     await Printing.sharePdf(bytes: pdfBytes, filename: filename);
+  }
+
+  /// Build shift statistics table (transposed - employees as columns, stats as rows)
+  static pw.Widget _buildShiftStatsTable({
+    required List<Employee> employees,
+    required List<DateTime> days,
+    required List<ShiftPlaceholder> shifts,
+    required StoreHours storeHours,
+    required List<JobCodeSettings> jobCodeSettings,
+  }) {
+    final headerStyle = pw.TextStyle(
+      fontWeight: pw.FontWeight.bold,
+      fontSize: 9,
+    );
+    final cellStyle = const pw.TextStyle(fontSize: 9);
+    final headerColor = PdfColor.fromHex('#FFEB3B'); // Yellow like main table
+
+    // Build column widths - NAME column + employee columns + no extra column
+    final colWidths = <int, pw.TableColumnWidth>{
+      0: const pw.FixedColumnWidth(60), // NAME/stat label column
+    };
+    for (int i = 0; i < employees.length; i++) {
+      colWidths[i + 1] = const pw.FixedColumnWidth(50);
+    }
+
+    // Pre-calculate stats for all employees
+    final allStats = <int, Map<String, int>>{};
+    for (final emp in employees) {
+      if (emp.id != null) {
+        allStats[emp.id!] = _getEmployeeShiftStats(
+          employeeId: emp.id!,
+          days: days,
+          shifts: shifts,
+          storeHours: storeHours,
+        );
+      }
+    }
+
+    final rows = <pw.TableRow>[];
+
+    // Header row with "NAME" and employee names - no internal borders
+    final headerBorder = const pw.Border(
+      bottom: pw.BorderSide(color: PdfColors.black, width: 1.5),
+    );
+    rows.add(
+      pw.TableRow(
+        decoration: pw.BoxDecoration(color: headerColor),
+        children: [
+          _padCell(
+            pw.Text('NAME', style: headerStyle),
+            align: pw.Alignment.centerLeft,
+            bgColor: headerColor,
+            border: headerBorder,
+          ),
+          ...employees.map((emp) {
+            return _padCell(
+              pw.Text(
+                emp.name,
+                style: pw.TextStyle(
+                  fontSize: 9,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+              align: pw.Alignment.center,
+              bgColor: headerColor,
+              border: headerBorder,
+            );
+          }),
+        ],
+      ),
+    );
+
+    // Stat rows: OPENS, MIDS, CLOSES, VAC/PTO, TOTAL
+    final statLabels = ['OPENS', 'MIDS', 'CLOSES', 'VAC/PTO', 'TOTAL'];
+    final statKeys = ['opens', 'mids', 'closes', 'vacPto', 'total'];
+
+    for (int i = 0; i < statLabels.length; i++) {
+      final isTotal = statLabels[i] == 'TOTAL';
+      rows.add(
+        pw.TableRow(
+          children: [
+            _padCell(
+              pw.Text(
+                statLabels[i],
+                style: isTotal ? headerStyle : cellStyle,
+              ),
+              align: pw.Alignment.centerLeft,
+            ),
+            ...employees.map((emp) {
+              final stats = allStats[emp.id] ?? {'opens': 0, 'mids': 0, 'closes': 0, 'vacPto': 0, 'total': 0};
+              final value = stats[statKeys[i]] ?? 0;
+              return _padCell(
+                pw.Text(
+                  '$value',
+                  style: isTotal 
+                    ? pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)
+                    : cellStyle,
+                ),
+                align: pw.Alignment.center,
+              );
+            }),
+          ],
+        ),
+      );
+    }
+
+    // Use separate tables for header and data to avoid vertical lines in header
+    final headerTable = pw.Table(
+      columnWidths: colWidths,
+      border: pw.TableBorder(
+        left: const pw.BorderSide(color: PdfColors.black, width: 1.5),
+        right: const pw.BorderSide(color: PdfColors.black, width: 1.5),
+        top: const pw.BorderSide(color: PdfColors.black, width: 1.5),
+        bottom: const pw.BorderSide(color: PdfColors.black, width: 1.5),
+        // No verticalInside for header
+      ),
+      defaultVerticalAlignment: pw.TableCellVerticalAlignment.middle,
+      children: [rows.first],
+    );
+
+    final dataTable = pw.Table(
+      columnWidths: colWidths,
+      border: pw.TableBorder(
+        left: const pw.BorderSide(color: PdfColors.black, width: 1.5),
+        right: const pw.BorderSide(color: PdfColors.black, width: 1.5),
+        bottom: const pw.BorderSide(color: PdfColors.black, width: 1.5),
+        horizontalInside: const pw.BorderSide(color: PdfColors.grey400, width: 0.4),
+        verticalInside: const pw.BorderSide(color: PdfColors.grey400, width: 0.4),
+      ),
+      defaultVerticalAlignment: pw.TableCellVerticalAlignment.middle,
+      children: rows.skip(1).toList(),
+    );
+
+    return pw.Column(
+      children: [
+        headerTable,
+        dataTable,
+      ],
+    );
   }
 }

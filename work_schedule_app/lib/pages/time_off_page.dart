@@ -8,6 +8,7 @@ import '../models/employee.dart';
 import '../models/time_off_entry.dart';
 import '../models/settings.dart';
 import '../services/pto_trimester_service.dart';
+import '../widgets/custom_time_picker.dart';
 
 class TimeOffPage extends StatefulWidget {
   const TimeOffPage({super.key});
@@ -381,7 +382,7 @@ class _TimeOffPageState extends State<TimeOffPage> {
       }
     } else if (type == 'sick') {
       // Sick/requested time off - can be full day or partial
-      final timeRange = await _selectTimeRange();
+      final timeRange = await _selectTimeRange(day: day);
       if (timeRange == null) return;
       
       final isAllDay = timeRange['isAllDay'] as bool;
@@ -599,11 +600,13 @@ class _TimeOffPageState extends State<TimeOffPage> {
 
   /// Shows a dialog to select time range for partial day time off
   /// Returns a map with 'isAllDay', 'startTime', 'endTime', and 'hours'
-  Future<Map<String, dynamic>?> _selectTimeRange() async {
+  /// [day] is used to get the store hours for that specific day
+  Future<Map<String, dynamic>?> _selectTimeRange({DateTime? day}) async {
     bool isAllDay = true;
     TimeOfDay startTime = const TimeOfDay(hour: 9, minute: 0);
     TimeOfDay endTime = const TimeOfDay(hour: 17, minute: 0);
     final defaultHours = _settings?.ptoHoursPerRequest ?? 8;
+    final dayOfWeek = day?.weekday;
 
     if (!mounted) return null;
     return showDialog<Map<String, dynamic>>(
@@ -615,7 +618,12 @@ class _TimeOffPageState extends State<TimeOffPage> {
             int calculatedHours = defaultHours;
             if (!isAllDay) {
               final startMinutes = startTime.hour * 60 + startTime.minute;
-              final endMinutes = endTime.hour * 60 + endTime.minute;
+              var endMinutes = endTime.hour * 60 + endTime.minute;
+              // Handle crossing midnight - if end time is before or equal to start time,
+              // treat it as next day (add 24 hours)
+              if (endMinutes <= startMinutes) {
+                endMinutes += 24 * 60;
+              }
               calculatedHours = ((endMinutes - startMinutes) / 60).round().clamp(1, 24);
             }
 
@@ -651,17 +659,14 @@ class _TimeOffPageState extends State<TimeOffPage> {
                         Expanded(
                           child: OutlinedButton(
                             onPressed: () async {
-                              final picked = await showTimePicker(
+                              final picked = await showTimePickerWithStoreHours(
                                 context: context,
                                 initialTime: startTime,
+                                dayOfWeek: dayOfWeek,
                               );
                               if (picked != null) {
                                 setDialogState(() {
                                   startTime = picked;
-                                  // Ensure end time is after start time
-                                  if (picked.hour * 60 + picked.minute >= endTime.hour * 60 + endTime.minute) {
-                                    endTime = TimeOfDay(hour: (picked.hour + 1) % 24, minute: picked.minute);
-                                  }
                                 });
                               }
                             },
@@ -675,9 +680,10 @@ class _TimeOffPageState extends State<TimeOffPage> {
                         Expanded(
                           child: OutlinedButton(
                             onPressed: () async {
-                              final picked = await showTimePicker(
+                              final picked = await showTimePickerWithStoreHours(
                                 context: context,
                                 initialTime: endTime,
+                                dayOfWeek: dayOfWeek,
                               );
                               if (picked != null) {
                                 setDialogState(() {
@@ -1180,8 +1186,10 @@ class _TimeOffPageState extends State<TimeOffPage> {
                                                         entry.startTime = '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
                                                         // Recalculate hours
                                                         final endParts = (entry.endTime ?? '17:00').split(':');
-                                                        final endMins = (int.tryParse(endParts[0]) ?? 17) * 60 + (int.tryParse(endParts[1]) ?? 0);
+                                                        var endMins = (int.tryParse(endParts[0]) ?? 17) * 60 + (int.tryParse(endParts[1]) ?? 0);
                                                         final startMins = picked.hour * 60 + picked.minute;
+                                                        // Handle crossing midnight
+                                                        if (endMins <= startMins) endMins += 24 * 60;
                                                         entry.hours = ((endMins - startMins) / 60).round().clamp(1, 24);
                                                       });
                                                     }
@@ -1212,7 +1220,9 @@ class _TimeOffPageState extends State<TimeOffPage> {
                                                         // Recalculate hours
                                                         final startParts = (entry.startTime ?? '09:00').split(':');
                                                         final startMins = (int.tryParse(startParts[0]) ?? 9) * 60 + (int.tryParse(startParts[1]) ?? 0);
-                                                        final endMins = picked.hour * 60 + picked.minute;
+                                                        var endMins = picked.hour * 60 + picked.minute;
+                                                        // Handle crossing midnight
+                                                        if (endMins <= startMins) endMins += 24 * 60;
                                                         entry.hours = ((endMins - startMins) / 60).round().clamp(1, 24);
                                                       });
                                                     }
