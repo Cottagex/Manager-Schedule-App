@@ -134,6 +134,23 @@ class ShiftDao {
     return getByDateRange(startOfMonth, endOfMonth);
   }
 
+  /// Get shifts for a full calendar month view (includes visible days from adjacent months)
+  Future<List<Shift>> getByCalendarMonth(int year, int month) async {
+    final firstDayOfMonth = DateTime(year, month, 1);
+    final lastDayOfMonth = DateTime(year, month + 1, 0);
+    
+    // Find the Sunday before or on the first day (start of first visible week)
+    final calendarStart = firstDayOfMonth.subtract(
+      Duration(days: firstDayOfMonth.weekday % 7),
+    );
+    
+    // Find the Saturday after or on the last day (end of last visible week)
+    final daysUntilSaturday = (6 - lastDayOfMonth.weekday % 7) % 7;
+    final calendarEnd = lastDayOfMonth.add(Duration(days: daysUntilSaturday + 1));
+    
+    return getByDateRange(calendarStart, calendarEnd);
+  }
+
   /// Check if a shift exists (for conflict detection)
   Future<bool> hasConflict(int employeeId, DateTime start, DateTime end, {int? excludeId}) async {
     final db = await _db;

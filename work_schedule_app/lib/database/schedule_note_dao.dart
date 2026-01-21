@@ -119,4 +119,27 @@ class ScheduleNoteDao {
     }
     return result;
   }
+
+  /// Get notes for a full calendar month view (includes visible days from adjacent months)
+  Future<Map<DateTime, ScheduleNote>> getByCalendarMonth(int year, int month) async {
+    final firstDayOfMonth = DateTime(year, month, 1);
+    final lastDayOfMonth = DateTime(year, month + 1, 0);
+    
+    // Find the Sunday before or on the first day (start of first visible week)
+    final calendarStart = firstDayOfMonth.subtract(
+      Duration(days: firstDayOfMonth.weekday % 7),
+    );
+    
+    // Find the Saturday after or on the last day (end of last visible week)
+    final daysUntilSaturday = (6 - lastDayOfMonth.weekday % 7) % 7;
+    final calendarEnd = lastDayOfMonth.add(Duration(days: daysUntilSaturday));
+    
+    final notes = await getByDateRange(calendarStart, calendarEnd);
+    final result = <DateTime, ScheduleNote>{};
+    for (final note in notes) {
+      final dateKey = DateTime(note.date.year, note.date.month, note.date.day);
+      result[dateKey] = note;
+    }
+    return result;
+  }
 }

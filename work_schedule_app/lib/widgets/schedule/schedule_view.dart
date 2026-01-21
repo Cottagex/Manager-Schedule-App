@@ -184,7 +184,8 @@ class _ScheduleViewState extends State<ScheduleView> {
     // Load actual shifts from database based on current view
     List<Shift> dbShifts;
     if (_mode == ScheduleMode.monthly) {
-      dbShifts = await _shiftDao.getByMonth(_date.year, _date.month);
+      // Use calendar month to include visible overlapping days from adjacent months
+      dbShifts = await _shiftDao.getByCalendarMonth(_date.year, _date.month);
     } else if (_mode == ScheduleMode.weekly) {
       dbShifts = await _shiftDao.getByWeek(_date);
     } else {
@@ -195,7 +196,8 @@ class _ScheduleViewState extends State<ScheduleView> {
     // Load notes based on current view
     Map<DateTime, ScheduleNote> notes;
     if (_mode == ScheduleMode.monthly) {
-      notes = await _noteDao.getByMonth(_date.year, _date.month);
+      // Use calendar month to include visible overlapping days from adjacent months
+      notes = await _noteDao.getByCalendarMonth(_date.year, _date.month);
     } else {
       notes = await _noteDao.getByWeek(_date);
     }
@@ -3665,10 +3667,20 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
   Future<void> _loadShiftRunnerData() async {
     final shiftTypes = await _shiftTypeDao.getAll();
     ShiftRunner.setShiftTypes(shiftTypes);
-    // Load runners for the whole month
-    final firstDay = DateTime(widget.date.year, widget.date.month, 1);
-    final lastDay = DateTime(widget.date.year, widget.date.month + 1, 0);
-    final runners = await _shiftRunnerDao.getForDateRange(firstDay, lastDay);
+    // Load runners for the full calendar view (including visible days from adjacent months)
+    final firstDayOfMonth = DateTime(widget.date.year, widget.date.month, 1);
+    final lastDayOfMonth = DateTime(widget.date.year, widget.date.month + 1, 0);
+    
+    // Find the Sunday before or on the first day (start of first visible week)
+    final calendarStart = firstDayOfMonth.subtract(
+      Duration(days: firstDayOfMonth.weekday % 7),
+    );
+    
+    // Find the Saturday after or on the last day (end of last visible week)
+    final daysUntilSaturday = (6 - lastDayOfMonth.weekday % 7) % 7;
+    final calendarEnd = lastDayOfMonth.add(Duration(days: daysUntilSaturday));
+    
+    final runners = await _shiftRunnerDao.getForDateRange(calendarStart, calendarEnd);
     if (mounted) {
       setState(() {
         _shiftTypes = shiftTypes;
@@ -4997,30 +5009,25 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
       }
 
       Widget buildDayCell(DateTime day) {
-        final isCurrentMonth = day.month == widget.date.month;
         return Container(
           padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
           alignment: Alignment.center,
-          color: isCurrentMonth 
-              ? Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3)
-              : Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.5),
+          color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
                 dayAbbr(day.weekday),
-                style: TextStyle(
+                style: const TextStyle(
                   fontWeight: FontWeight.bold, 
                   fontSize: 9,
-                  color: isCurrentMonth ? null : Colors.grey,
                 ),
               ),
               Text(
                 '${day.month}/${day.day}',
-                style: TextStyle(
+                style: const TextStyle(
                   fontWeight: FontWeight.w500, 
                   fontSize: 9,
-                  color: isCurrentMonth ? null : Colors.grey,
                 ),
               ),
             ],
