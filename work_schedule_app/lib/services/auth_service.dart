@@ -74,6 +74,41 @@ class AuthService {
     }
   }
 
+  /// Create a new manager account
+  Future<UserCredential> createManagerAccount({
+    required String email,
+    required String password,
+    String? displayName,
+  }) async {
+    try {
+      final credential = await _auth.createUserWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+
+      // Create user document with manager role
+      if (credential.user != null) {
+        await _firestore.collection('users').doc(credential.user!.uid).set({
+          'email': email,
+          'displayName': displayName,
+          'role': 'manager',
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+
+        // Update display name if provided
+        if (displayName != null && displayName.isNotEmpty) {
+          await credential.user!.updateDisplayName(displayName);
+        }
+      }
+
+      log('Manager account created: $email', name: 'AuthService');
+      return credential;
+    } catch (e) {
+      log('Create account error: $e', name: 'AuthService');
+      rethrow;
+    }
+  }
+
   /// Send password reset email
   Future<void> sendPasswordResetEmail(String email) async {
     await _auth.sendPasswordResetEmail(email: email);
@@ -124,6 +159,10 @@ String getAuthErrorMessage(dynamic error) {
         return 'Too many failed attempts. Please try again later.';
       case 'network-request-failed':
         return 'Network error. Please check your connection.';
+      case 'email-already-in-use':
+        return 'An account with this email already exists.';
+      case 'weak-password':
+        return 'Password is too weak. Please use at least 6 characters.';
       case 'invalid-credential':
         return 'Invalid email or password.';
       default:

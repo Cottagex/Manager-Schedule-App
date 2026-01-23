@@ -29,6 +29,7 @@ dependencies:
   path: ^1.8.3
   shared_preferences: ^2.2.2
   uuid: ^4.5.2
+  connectivity_plus: ^6.0.3
 
   # UI
   cupertino_icons: ^1.0.8

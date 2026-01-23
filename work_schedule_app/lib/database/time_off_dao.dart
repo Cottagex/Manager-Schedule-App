@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 import 'app_database.dart';
 import '../models/time_off_entry.dart';
+import '../services/auto_sync_service.dart';
 
 class TimeOffDao {
   Future<Database> get _db async => AppDatabase.instance.db;
@@ -41,7 +42,12 @@ class TimeOffDao {
   // ------------------------------------------------------------
   Future<int> insertTimeOff(TimeOffEntry entry) async {
     final db = await _db;
-    return await db.insert('time_off', entry.toMap());
+    final id = await db.insert('time_off', entry.toMap());
+    
+    // Notify auto-sync service of the change
+    AutoSyncService.instance.onTimeOffDataChanged();
+    
+    return id;
   }
 
   // ------------------------------------------------------------
@@ -50,12 +56,17 @@ class TimeOffDao {
   Future<int> updateTimeOff(TimeOffEntry entry) async {
     final db = await _db;
     if (entry.id == null) throw Exception("Missing ID");
-    return await db.update(
+    final result = await db.update(
       'time_off',
       entry.toMap(),
       where: 'id = ?',
       whereArgs: [entry.id],
     );
+    
+    // Notify auto-sync service of the change
+    AutoSyncService.instance.onTimeOffDataChanged();
+    
+    return result;
   }
 
   // ------------------------------------------------------------
@@ -63,11 +74,16 @@ class TimeOffDao {
   // ------------------------------------------------------------
   Future<int> deleteTimeOff(int id) async {
     final db = await _db;
-    return await db.delete(
+    final result = await db.delete(
       'time_off',
       where: 'id = ?',
       whereArgs: [id],
     );
+    
+    // Notify auto-sync service of the change
+    AutoSyncService.instance.onTimeOffDataChanged();
+    
+    return result;
   }
 
   // ------------------------------------------------------------
@@ -75,11 +91,16 @@ class TimeOffDao {
   // ------------------------------------------------------------
   Future<int> deleteVacationGroup(String groupId) async {
     final db = await _db;
-    return await db.delete(
+    final result = await db.delete(
       'time_off',
       where: 'vacationGroupId = ?',
       whereArgs: [groupId],
     );
+    
+    // Notify auto-sync service of the change
+    AutoSyncService.instance.onTimeOffDataChanged();
+    
+    return result;
   }
 
   // ------------------------------------------------------------

@@ -2,76 +2,127 @@ import 'dart:developer';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:work_schedule_app/database/app_database.dart';
 import 'package:work_schedule_app/models/employee.dart';
 import 'package:work_schedule_app/models/shift.dart';
 import 'package:work_schedule_app/models/time_off_entry.dart';
+import 'auth_service.dart';
 
 /// Service for syncing data between local SQLite and Firestore.
-/// 
+///
+/// All data is stored per-manager using subcollections under their UID.
+/// This allows each manager to have their own roster, schedules, and time-off.
+///
 /// Sync Strategy:
 /// - Employee roster: Auto-sync on changes (create/update/delete)
 /// - Schedules: Manual "Publish to Employees" action
 /// - Time-off entries: Auto-sync approved entries
 class FirestoreSyncService {
-  static final FirestoreSyncService _instance = FirestoreSyncService._internal();
+  static final FirestoreSyncService _instance =
+      FirestoreSyncService._internal();
   static FirestoreSyncService get instance => _instance;
 
   FirestoreSyncService._internal();
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseFunctions _functions = FirebaseFunctions.instance;
-  
-  // Collection references
-  CollectionReference<Map<String, dynamic>> get _employeesRef =>
-      _firestore.collection('employees');
-  
-  CollectionReference<Map<String, dynamic>> get _shiftsRef =>
-      _firestore.collection('shifts');
-  
-  CollectionReference<Map<String, dynamic>> get _timeOffRef =>
-      _firestore.collection('timeOff');
-  
-  CollectionReference<Map<String, dynamic>> get _publishedSchedulesRef =>
-      _firestore.collection('publishedSchedules');
+
+  /// Get the current manager's UID
+  String? get _managerUid => AuthService.instance.currentUserUid;
+
+  /// Get the manager's document reference
+  DocumentReference<Map<String, dynamic>>? get _managerDocRef {
+    final uid = _managerUid;
+    if (uid == null) return null;
+    return _firestore.collection('managers').doc(uid);
+  }
+
+  // Collection references (per-manager subcollections)
+  CollectionReference<Map<String, dynamic>>? get _employeesRef {
+    final ref = _managerDocRef;
+    if (ref == null) return null;
+    return ref.collection('employees');
+  }
+
+  CollectionReference<Map<String, dynamic>>? get _shiftsRef {
+    final ref = _managerDocRef;
+    if (ref == null) return null;
+    return ref.collection('shifts');
+  }
+
+  CollectionReference<Map<String, dynamic>>? get _timeOffRef {
+    final ref = _managerDocRef;
+    if (ref == null) return null;
+    return ref.collection('timeOff');
+  }
+
+  CollectionReference<Map<String, dynamic>>? get _publishedSchedulesRef {
+    final ref = _managerDocRef;
+    if (ref == null) return null;
+    return ref.collection('publishedSchedules');
+  }
+
+  CollectionReference<Map<String, dynamic>>? get _timeOffRequestsRef {
+    final ref = _managerDocRef;
+    if (ref == null) return null;
+    return ref.collection('timeOffRequests');
+  }
 
   // ============== EMPLOYEE ACCOUNT SYNC ==============
-  
+
   /// Call Cloud Function to create Firebase Auth accounts for all employees.
   /// This sets up UIDs for employees that were created before Cloud Functions existed.
   Future<Map<String, dynamic>> syncAllEmployeeAccounts() async {
+    final uid = _managerUid;
+    if (uid == null) {
+      throw Exception('Not logged in');
+    }
+
     try {
-      log('Calling syncAllEmployeeAccounts Cloud Function...', name: 'FirestoreSyncService');
-      
+      log(
+        'Calling syncAllEmployeeAccounts Cloud Function...',
+        name: 'FirestoreSyncService',
+      );
+
       final callable = _functions.httpsCallable('syncAllEmployeeAccounts');
-      final result = await callable.call();
-      
+      final result = await callable.call({'managerUid': uid});
+
       final data = Map<String, dynamic>.from(result.data as Map);
       log('Sync result: $data', name: 'FirestoreSyncService');
-      
+
       // After Cloud Function updates Firestore, sync UIDs to local DB
       await syncEmployeeUidsFromFirestore();
-      
+
       return data;
     } catch (e) {
-      log('Error calling syncAllEmployeeAccounts: $e', name: 'FirestoreSyncService');
+      log(
+        'Error calling syncAllEmployeeAccounts: $e',
+        name: 'FirestoreSyncService',
+      );
       rethrow;
     }
   }
 
   // ============== EMPLOYEE ROSTER SYNC ==============
-  
+
   /// Sync a single employee to Firestore.
   /// Called automatically when employee is created or updated.
   Future<void> syncEmployee(Employee employee) async {
+    final employeesRef = _employeesRef;
+    if (employeesRef == null) {
+      log('Cannot sync employee - not logged in', name: 'FirestoreSyncService');
+      return;
+    }
+
     if (employee.id == null) {
       log('Cannot sync employee without ID', name: 'FirestoreSyncService');
       return;
     }
 
     try {
-      final docRef = _employeesRef.doc(employee.id.toString());
-      
+      final docRef = employeesRef.doc(employee.id.toString());
+
       await docRef.set({
         'localId': employee.id,
         'name': employee.name,
@@ -82,9 +133,11 @@ class FirestoreSyncService {
         'vacationWeeksUsed': employee.vacationWeeksUsed,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-      
-      log('Synced employee ${employee.name} to Firestore', 
-          name: 'FirestoreSyncService');
+
+      log(
+        'Synced employee ${employee.name} to Firestore',
+        name: 'FirestoreSyncService',
+      );
     } catch (e) {
       log('Error syncing employee: $e', name: 'FirestoreSyncService');
       rethrow;
@@ -93,17 +146,26 @@ class FirestoreSyncService {
 
   /// Sync all employees to Firestore.
   Future<void> syncAllEmployees() async {
+    final employeesRef = _employeesRef;
+    if (employeesRef == null) {
+      log(
+        'Cannot sync employees - not logged in',
+        name: 'FirestoreSyncService',
+      );
+      return;
+    }
+
     try {
       final db = await AppDatabase.instance.db;
       final maps = await db.query('employees');
       final employees = maps.map((m) => Employee.fromMap(m)).toList();
-      
+
       final batch = _firestore.batch();
-      
+
       for (final employee in employees) {
         if (employee.id == null) continue;
-        
-        final docRef = _employeesRef.doc(employee.id.toString());
+
+        final docRef = employeesRef.doc(employee.id.toString());
         batch.set(docRef, {
           'localId': employee.id,
           'name': employee.name,
@@ -115,10 +177,12 @@ class FirestoreSyncService {
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       }
-      
+
       await batch.commit();
-      log('Synced ${employees.length} employees to Firestore', 
-          name: 'FirestoreSyncService');
+      log(
+        'Synced ${employees.length} employees to Firestore',
+        name: 'FirestoreSyncService',
+      );
     } catch (e) {
       log('Error syncing all employees: $e', name: 'FirestoreSyncService');
       rethrow;
@@ -127,18 +191,30 @@ class FirestoreSyncService {
 
   /// Delete an employee from Firestore.
   Future<void> deleteEmployee(int employeeId) async {
+    final employeesRef = _employeesRef;
+    final shiftsRef = _shiftsRef;
+    final timeOffRef = _timeOffRef;
+
+    if (employeesRef == null || shiftsRef == null || timeOffRef == null) {
+      log(
+        'Cannot delete employee - not logged in',
+        name: 'FirestoreSyncService',
+      );
+      return;
+    }
+
     try {
-      await _employeesRef.doc(employeeId.toString()).delete();
-      
+      await employeesRef.doc(employeeId.toString()).delete();
+
       // Also delete their shifts and time-off
-      final shiftsQuery = await _shiftsRef
+      final shiftsQuery = await shiftsRef
           .where('employeeLocalId', isEqualTo: employeeId)
           .get();
-      
-      final timeOffQuery = await _timeOffRef
+
+      final timeOffQuery = await timeOffRef
           .where('employeeLocalId', isEqualTo: employeeId)
           .get();
-      
+
       final batch = _firestore.batch();
       for (final doc in shiftsQuery.docs) {
         batch.delete(doc.reference);
@@ -147,12 +223,16 @@ class FirestoreSyncService {
         batch.delete(doc.reference);
       }
       await batch.commit();
-      
-      log('Deleted employee $employeeId from Firestore', 
-          name: 'FirestoreSyncService');
+
+      log(
+        'Deleted employee $employeeId from Firestore',
+        name: 'FirestoreSyncService',
+      );
     } catch (e) {
-      log('Error deleting employee from Firestore: $e', 
-          name: 'FirestoreSyncService');
+      log(
+        'Error deleting employee from Firestore: $e',
+        name: 'FirestoreSyncService',
+      );
       rethrow;
     }
   }
@@ -160,19 +240,25 @@ class FirestoreSyncService {
   /// Sync employee UIDs from Firestore back to local database.
   /// This pulls UIDs that were set by Cloud Functions when accounts were created.
   Future<int> syncEmployeeUidsFromFirestore() async {
+    final employeesRef = _employeesRef;
+    if (employeesRef == null) {
+      log('Cannot sync UIDs - not logged in', name: 'FirestoreSyncService');
+      return 0;
+    }
+
     try {
       final db = await AppDatabase.instance.db;
-      
+
       // Get all employees from Firestore
-      final snapshot = await _employeesRef.get();
-      
+      final snapshot = await employeesRef.get();
+
       int updatedCount = 0;
-      
+
       for (final doc in snapshot.docs) {
         final data = doc.data();
         final localId = data['localId'] as int?;
         final uid = data['uid'] as String?;
-        
+
         if (localId != null && uid != null) {
           // Update local database with the UID
           final result = await db.update(
@@ -181,16 +267,21 @@ class FirestoreSyncService {
             where: 'id = ? AND (uid IS NULL OR uid != ?)',
             whereArgs: [localId, uid],
           );
-          
+
           if (result > 0) {
             updatedCount++;
-            log('Synced UID for employee $localId', name: 'FirestoreSyncService');
+            log(
+              'Synced UID for employee $localId',
+              name: 'FirestoreSyncService',
+            );
           }
         }
       }
-      
-      log('Synced $updatedCount employee UIDs from Firestore', 
-          name: 'FirestoreSyncService');
+
+      log(
+        'Synced $updatedCount employee UIDs from Firestore',
+        name: 'FirestoreSyncService',
+      );
       return updatedCount;
     } catch (e) {
       log('Error syncing employee UIDs: $e', name: 'FirestoreSyncService');
@@ -199,7 +290,7 @@ class FirestoreSyncService {
   }
 
   // ============== SCHEDULE PUBLISHING ==============
-  
+
   /// Publish shifts for a date range to Firestore.
   /// This is the manual "Publish to Employees" action.
   Future<PublishResult> publishSchedule({
@@ -207,33 +298,45 @@ class FirestoreSyncService {
     required DateTime endDate,
     List<int>? employeeIds, // If null, publish for all employees
   }) async {
+    final shiftsRef = _shiftsRef;
+    final publishedSchedulesRef = _publishedSchedulesRef;
+
+    if (shiftsRef == null || publishedSchedulesRef == null) {
+      return PublishResult(
+        success: false,
+        shiftsPublished: 0,
+        message: 'Not logged in',
+      );
+    }
+
     try {
       // First, sync employee UIDs from Firestore to ensure we have the latest
       await syncEmployeeUidsFromFirestore();
-      
+
       final db = await AppDatabase.instance.db;
-      
+
       // Build query for shifts in the date range
-      String whereClause = "date(startTime) >= date(?) AND date(startTime) <= date(?)";
+      String whereClause =
+          "date(startTime) >= date(?) AND date(startTime) <= date(?)";
       List<dynamic> whereArgs = [
         startDate.toIso8601String().split('T')[0],
         endDate.toIso8601String().split('T')[0],
       ];
-      
+
       if (employeeIds != null && employeeIds.isNotEmpty) {
         final placeholders = employeeIds.map((_) => '?').join(',');
         whereClause += " AND employeeId IN ($placeholders)";
         whereArgs.addAll(employeeIds);
       }
-      
+
       final shiftMaps = await db.query(
         'shifts',
         where: whereClause,
         whereArgs: whereArgs,
       );
-      
+
       final shifts = shiftMaps.map((m) => Shift.fromMap(m)).toList();
-      
+
       if (shifts.isEmpty) {
         return PublishResult(
           success: true,
@@ -241,7 +344,7 @@ class FirestoreSyncService {
           message: 'No shifts found in the selected date range',
         );
       }
-      
+
       // Get employee info for all shifts
       final employeeIdsInShifts = shifts.map((s) => s.employeeId).toSet();
       final employeeMaps = await db.query(
@@ -250,34 +353,35 @@ class FirestoreSyncService {
         whereArgs: employeeIdsInShifts.toList(),
       );
       final employeeMap = {
-        for (final m in employeeMaps)
-          m['id'] as int: Employee.fromMap(m)
+        for (final m in employeeMaps) m['id'] as int: Employee.fromMap(m),
       };
-      
+
       // Create a batch operation
       final batch = _firestore.batch();
       final publishedAt = FieldValue.serverTimestamp();
       final publishId = DateTime.now().millisecondsSinceEpoch.toString();
-      
+
       int publishedCount = 0;
       int skippedNoUid = 0;
-      
+
       for (final shift in shifts) {
         if (shift.id == null) continue;
-        
+
         final employee = employeeMap[shift.employeeId];
         if (employee == null) continue;
-        
+
         // Skip employees without UID - they won't be able to see their schedule
         if (employee.uid == null || employee.uid!.isEmpty) {
           skippedNoUid++;
-          log('Skipping shift for ${employee.name} - no Firebase UID (email: ${employee.email})', 
-              name: 'FirestoreSyncService');
+          log(
+            'Skipping shift for ${employee.name} - no Firebase UID (email: ${employee.email})',
+            name: 'FirestoreSyncService',
+          );
           continue;
         }
-        
-        final docRef = _shiftsRef.doc('${shift.employeeId}_${shift.id}');
-        
+
+        final docRef = shiftsRef.doc('${shift.employeeId}_${shift.id}');
+
         batch.set(docRef, {
           'localId': shift.id,
           'employeeLocalId': shift.employeeId,
@@ -290,30 +394,34 @@ class FirestoreSyncService {
           'publishedAt': publishedAt,
           'publishId': publishId,
           'date': shift.startTime.toIso8601String().split('T')[0],
+          'managerUid': _managerUid,
         });
-        
+
         publishedCount++;
       }
-      
+
       // Record the publish event
-      batch.set(_publishedSchedulesRef.doc(publishId), {
+      batch.set(publishedSchedulesRef.doc(publishId), {
         'startDate': startDate.toIso8601String().split('T')[0],
         'endDate': endDate.toIso8601String().split('T')[0],
         'employeeIds': employeeIds,
         'shiftsCount': publishedCount,
         'publishedAt': publishedAt,
       });
-      
+
       await batch.commit();
-      
-      log('Published $publishedCount shifts to Firestore (skipped $skippedNoUid without UID)', 
-          name: 'FirestoreSyncService');
-      
+
+      log(
+        'Published $publishedCount shifts to Firestore (skipped $skippedNoUid without UID)',
+        name: 'FirestoreSyncService',
+      );
+
       String message = 'Successfully published $publishedCount shifts';
       if (skippedNoUid > 0) {
-        message += '\n⚠️ $skippedNoUid shifts skipped (employees without Firebase accounts)';
+        message +=
+            '\n⚠️ $skippedNoUid shifts skipped (employees without Firebase accounts)';
       }
-      
+
       return PublishResult(
         success: true,
         shiftsPublished: publishedCount,
@@ -334,16 +442,25 @@ class FirestoreSyncService {
     required DateTime startDate,
     required DateTime endDate,
   }) async {
+    final publishedSchedulesRef = _publishedSchedulesRef;
+    if (publishedSchedulesRef == null) return null;
+
     try {
-      final query = await _publishedSchedulesRef
-          .where('startDate', isLessThanOrEqualTo: endDate.toIso8601String().split('T')[0])
-          .where('endDate', isGreaterThanOrEqualTo: startDate.toIso8601String().split('T')[0])
+      final query = await publishedSchedulesRef
+          .where(
+            'startDate',
+            isLessThanOrEqualTo: endDate.toIso8601String().split('T')[0],
+          )
+          .where(
+            'endDate',
+            isGreaterThanOrEqualTo: startDate.toIso8601String().split('T')[0],
+          )
           .orderBy('publishedAt', descending: true)
           .limit(1)
           .get();
-      
+
       if (query.docs.isEmpty) return null;
-      
+
       return query.docs.first.data();
     } catch (e) {
       log('Error getting publish info: $e', name: 'FirestoreSyncService');
@@ -352,18 +469,27 @@ class FirestoreSyncService {
   }
 
   // ============== TIME OFF SYNC ==============
-  
+
   /// Sync a time-off entry to Firestore.
   /// Called when manager approves or enters time-off.
   Future<void> syncTimeOffEntry(TimeOffEntry entry, Employee employee) async {
+    final timeOffRef = _timeOffRef;
+    if (timeOffRef == null) {
+      log('Cannot sync time-off - not logged in', name: 'FirestoreSyncService');
+      return;
+    }
+
     if (entry.id == null) {
-      log('Cannot sync time-off entry without ID', name: 'FirestoreSyncService');
+      log(
+        'Cannot sync time-off entry without ID',
+        name: 'FirestoreSyncService',
+      );
       return;
     }
 
     try {
-      final docRef = _timeOffRef.doc('${entry.employeeId}_${entry.id}');
-      
+      final docRef = timeOffRef.doc('${entry.employeeId}_${entry.id}');
+
       await docRef.set({
         'localId': entry.id,
         'employeeLocalId': entry.employeeId,
@@ -378,8 +504,9 @@ class FirestoreSyncService {
         'endTime': entry.endTime,
         'status': 'approved', // Manager-entered time-off is pre-approved
         'updatedAt': FieldValue.serverTimestamp(),
+        'managerUid': _managerUid,
       }, SetOptions(merge: true));
-      
+
       log('Synced time-off entry to Firestore', name: 'FirestoreSyncService');
     } catch (e) {
       log('Error syncing time-off entry: $e', name: 'FirestoreSyncService');
@@ -389,9 +516,21 @@ class FirestoreSyncService {
 
   /// Delete a time-off entry from Firestore.
   Future<void> deleteTimeOffEntry(int employeeId, int entryId) async {
+    final timeOffRef = _timeOffRef;
+    if (timeOffRef == null) {
+      log(
+        'Cannot delete time-off - not logged in',
+        name: 'FirestoreSyncService',
+      );
+      return;
+    }
+
     try {
-      await _timeOffRef.doc('${employeeId}_$entryId').delete();
-      log('Deleted time-off entry from Firestore', name: 'FirestoreSyncService');
+      await timeOffRef.doc('${employeeId}_$entryId').delete();
+      log(
+        'Deleted time-off entry from Firestore',
+        name: 'FirestoreSyncService',
+      );
     } catch (e) {
       log('Error deleting time-off entry: $e', name: 'FirestoreSyncService');
       rethrow;
@@ -403,9 +542,15 @@ class FirestoreSyncService {
     required DateTime startDate,
     required DateTime endDate,
   }) async {
+    final timeOffRef = _timeOffRef;
+    if (timeOffRef == null) {
+      log('Cannot sync time-off - not logged in', name: 'FirestoreSyncService');
+      return;
+    }
+
     try {
       final db = await AppDatabase.instance.db;
-      
+
       final timeOffMaps = await db.query(
         'time_off',
         where: "date >= ? AND date <= ?",
@@ -414,9 +559,9 @@ class FirestoreSyncService {
           endDate.toIso8601String().split('T')[0],
         ],
       );
-      
+
       final entries = timeOffMaps.map((m) => TimeOffEntry.fromMap(m)).toList();
-      
+
       // Get employees
       final employeeIds = entries.map((e) => e.employeeId).toSet();
       final employeeMaps = await db.query(
@@ -425,18 +570,17 @@ class FirestoreSyncService {
         whereArgs: employeeIds.toList(),
       );
       final employeeMap = {
-        for (final m in employeeMaps)
-          m['id'] as int: Employee.fromMap(m)
+        for (final m in employeeMaps) m['id'] as int: Employee.fromMap(m),
       };
-      
+
       final batch = _firestore.batch();
-      
+
       for (final entry in entries) {
         if (entry.id == null) continue;
         final employee = employeeMap[entry.employeeId];
         if (employee == null) continue;
-        
-        final docRef = _timeOffRef.doc('${entry.employeeId}_${entry.id}');
+
+        final docRef = timeOffRef.doc('${entry.employeeId}_${entry.id}');
         batch.set(docRef, {
           'localId': entry.id,
           'employeeLocalId': entry.employeeId,
@@ -451,12 +595,15 @@ class FirestoreSyncService {
           'endTime': entry.endTime,
           'status': 'approved',
           'updatedAt': FieldValue.serverTimestamp(),
+          'managerUid': _managerUid,
         }, SetOptions(merge: true));
       }
-      
+
       await batch.commit();
-      log('Synced ${entries.length} time-off entries to Firestore', 
-          name: 'FirestoreSyncService');
+      log(
+        'Synced ${entries.length} time-off entries to Firestore',
+        name: 'FirestoreSyncService',
+      );
     } catch (e) {
       log('Error syncing all time-off: $e', name: 'FirestoreSyncService');
       rethrow;
@@ -464,41 +611,51 @@ class FirestoreSyncService {
   }
 
   // ============== TIME-OFF REQUESTS (from employees) ==============
-  
+
   /// Listen to pending time-off requests from employees.
   Stream<List<TimeOffRequest>> watchPendingRequests() {
-    return _firestore
-        .collection('timeOffRequests')
+    final requestsRef = _timeOffRequestsRef;
+    if (requestsRef == null) {
+      return Stream.value([]);
+    }
+
+    return requestsRef
         .where('status', isEqualTo: 'pending')
         .orderBy('createdAt', descending: false)
         .snapshots()
-        .map((snapshot) => snapshot.docs
-            .map((doc) => TimeOffRequest.fromFirestore(doc))
-            .toList());
+        .map(
+          (snapshot) => snapshot.docs
+              .map((doc) => TimeOffRequest.fromFirestore(doc))
+              .toList(),
+        );
   }
 
   /// Approve a time-off request.
   Future<void> approveTimeOffRequest(String requestId) async {
+    final requestsRef = _timeOffRequestsRef;
+    final timeOffRef = _timeOffRef;
+
+    if (requestsRef == null || timeOffRef == null) {
+      throw Exception('Not logged in');
+    }
+
     try {
-      final requestDoc = await _firestore
-          .collection('timeOffRequests')
-          .doc(requestId)
-          .get();
-      
+      final requestDoc = await requestsRef.doc(requestId).get();
+
       if (!requestDoc.exists) {
         throw Exception('Request not found');
       }
-      
+
       final data = requestDoc.data()!;
-      
+
       // Update request status
       await requestDoc.reference.update({
         'status': 'approved',
         'reviewedAt': FieldValue.serverTimestamp(),
       });
-      
+
       // Create approved time-off entry
-      await _timeOffRef.doc(requestId).set({
+      await timeOffRef.doc(requestId).set({
         'localId': null, // Will be set when synced to manager app
         'employeeLocalId': data['employeeLocalId'],
         'employeeUid': data['employeeUid'],
@@ -513,9 +670,13 @@ class FirestoreSyncService {
         'status': 'approved',
         'requestId': requestId,
         'updatedAt': FieldValue.serverTimestamp(),
+        'managerUid': _managerUid,
       });
-      
-      log('Approved time-off request: $requestId', name: 'FirestoreSyncService');
+
+      log(
+        'Approved time-off request: $requestId',
+        name: 'FirestoreSyncService',
+      );
     } catch (e) {
       log('Error approving request: $e', name: 'FirestoreSyncService');
       rethrow;
@@ -524,16 +685,18 @@ class FirestoreSyncService {
 
   /// Deny a time-off request.
   Future<void> denyTimeOffRequest(String requestId, {String? reason}) async {
+    final requestsRef = _timeOffRequestsRef;
+    if (requestsRef == null) {
+      throw Exception('Not logged in');
+    }
+
     try {
-      await _firestore
-          .collection('timeOffRequests')
-          .doc(requestId)
-          .update({
-            'status': 'denied',
-            'denialReason': reason,
-            'reviewedAt': FieldValue.serverTimestamp(),
-          });
-      
+      await requestsRef.doc(requestId).update({
+        'status': 'denied',
+        'denialReason': reason,
+        'reviewedAt': FieldValue.serverTimestamp(),
+      });
+
       log('Denied time-off request: $requestId', name: 'FirestoreSyncService');
     } catch (e) {
       log('Error denying request: $e', name: 'FirestoreSyncService');
@@ -543,18 +706,176 @@ class FirestoreSyncService {
 
   /// Get count of pending requests.
   Future<int> getPendingRequestCount() async {
+    final requestsRef = _timeOffRequestsRef;
+    if (requestsRef == null) return 0;
+
     try {
-      final snapshot = await _firestore
-          .collection('timeOffRequests')
+      final snapshot = await requestsRef
           .where('status', isEqualTo: 'pending')
           .count()
           .get();
-      
+
       return snapshot.count ?? 0;
     } catch (e) {
       log('Error getting pending count: $e', name: 'FirestoreSyncService');
       return 0;
     }
+  }
+
+  // ============== DATA DOWNLOAD (Cloud to Local) ==============
+
+  /// Download all data from cloud to local database.
+  /// Call this when logging in on a new device.
+  Future<void> downloadAllDataFromCloud() async {
+    final employeesRef = _employeesRef;
+    final shiftsRef = _shiftsRef;
+    final timeOffRef = _timeOffRef;
+
+    if (employeesRef == null || shiftsRef == null || timeOffRef == null) {
+      throw Exception('Not logged in');
+    }
+
+    final db = await AppDatabase.instance.db;
+
+    try {
+      // Download employees
+      final employeesSnapshot = await employeesRef.get();
+      for (final doc in employeesSnapshot.docs) {
+        final data = doc.data();
+        await db.insert('employees', {
+          'id': data['localId'],
+          'name': data['name'],
+          'jobCode': data['jobCode'],
+          'email': data['email'],
+          'uid': data['uid'],
+          'vacationWeeksAllowed': data['vacationWeeksAllowed'] ?? 0,
+          'vacationWeeksUsed': data['vacationWeeksUsed'] ?? 0,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      log(
+        'Downloaded ${employeesSnapshot.docs.length} employees',
+        name: 'FirestoreSyncService',
+      );
+
+      // Download shifts
+      final shiftsSnapshot = await shiftsRef.get();
+      for (final doc in shiftsSnapshot.docs) {
+        final data = doc.data();
+        final startTime = (data['startTime'] as Timestamp).toDate();
+        final endTime = (data['endTime'] as Timestamp).toDate();
+        await db.insert('shifts', {
+          'id': data['localId'],
+          'employeeId': data['employeeLocalId'],
+          'startTime': startTime.toIso8601String(),
+          'endTime': endTime.toIso8601String(),
+          'label': data['label'],
+          'notes': data['notes'],
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      log(
+        'Downloaded ${shiftsSnapshot.docs.length} shifts',
+        name: 'FirestoreSyncService',
+      );
+
+      // Download time-off
+      final timeOffSnapshot = await timeOffRef.get();
+      for (final doc in timeOffSnapshot.docs) {
+        final data = doc.data();
+        if (data['localId'] == null) continue; // Skip entries without local ID
+        await db.insert('time_off', {
+          'id': data['localId'],
+          'employeeId': data['employeeLocalId'],
+          'date': data['date'],
+          'timeOffType': data['timeOffType'],
+          'hours': data['hours'],
+          'vacationGroupId': data['vacationGroupId'],
+          'isAllDay': (data['isAllDay'] ?? true) ? 1 : 0,
+          'startTime': data['startTime'],
+          'endTime': data['endTime'],
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      log(
+        'Downloaded ${timeOffSnapshot.docs.length} time-off entries',
+        name: 'FirestoreSyncService',
+      );
+    } catch (e) {
+      log(
+        'Error downloading data from cloud: $e',
+        name: 'FirestoreSyncService',
+      );
+      rethrow;
+    }
+  }
+
+  /// Check if cloud data exists for this manager
+  Future<bool> hasCloudData() async {
+    final employeesRef = _employeesRef;
+    if (employeesRef == null) return false;
+
+    try {
+      final snapshot = await employeesRef.limit(1).get();
+      return snapshot.docs.isNotEmpty;
+    } catch (e) {
+      log('Error checking cloud data: $e', name: 'FirestoreSyncService');
+      return false;
+    }
+  }
+
+  /// Upload all local data to cloud.
+  /// Call this to backup local data to cloud.
+  Future<void> uploadAllDataToCloud() async {
+    await syncAllEmployees();
+
+    // Sync all shifts
+    final db = await AppDatabase.instance.db;
+    final shiftMaps = await db.query('shifts');
+    final shifts = shiftMaps.map((m) => Shift.fromMap(m)).toList();
+
+    if (shifts.isNotEmpty) {
+      final employeeIds = shifts.map((s) => s.employeeId).toSet();
+      final employeeMaps = await db.query(
+        'employees',
+        where: 'id IN (${employeeIds.map((_) => '?').join(',')})',
+        whereArgs: employeeIds.toList(),
+      );
+      final employeeMap = {
+        for (final m in employeeMaps) m['id'] as int: Employee.fromMap(m),
+      };
+
+      final shiftsRef = _shiftsRef;
+      if (shiftsRef != null) {
+        final batch = _firestore.batch();
+        for (final shift in shifts) {
+          if (shift.id == null) continue;
+          final employee = employeeMap[shift.employeeId];
+          if (employee == null) continue;
+
+          final docRef = shiftsRef.doc('${shift.employeeId}_${shift.id}');
+          batch.set(docRef, {
+            'localId': shift.id,
+            'employeeLocalId': shift.employeeId,
+            'employeeUid': employee.uid,
+            'employeeName': employee.name,
+            'startTime': Timestamp.fromDate(shift.startTime),
+            'endTime': Timestamp.fromDate(shift.endTime),
+            'label': shift.label,
+            'notes': shift.notes,
+            'managerUid': _managerUid,
+          });
+        }
+        await batch.commit();
+        log(
+          'Uploaded ${shifts.length} shifts to cloud',
+          name: 'FirestoreSyncService',
+        );
+      }
+    }
+
+    // Sync all time-off
+    final now = DateTime.now();
+    final startOfYear = DateTime(now.year - 1, 1, 1);
+    final endOfYear = DateTime(now.year + 1, 12, 31);
+    await syncAllTimeOff(startDate: startOfYear, endDate: endOfYear);
   }
 }
 
@@ -607,7 +928,9 @@ class TimeOffRequest {
     this.reviewedAt,
   });
 
-  factory TimeOffRequest.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
+  factory TimeOffRequest.fromFirestore(
+    DocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
     final data = doc.data()!;
     return TimeOffRequest(
       id: doc.id,

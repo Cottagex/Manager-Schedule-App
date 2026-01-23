@@ -10,6 +10,168 @@ const auth = admin.auth();
 const db = admin.firestore();
 
 /**
+ * Triggered when a new employee document is created in a manager's subcollection.
+ * If the employee has an email, creates a Firebase Auth account
+ * and sends a password reset email.
+ */
+export const onEmployeeCreatedInManager = onDocumentCreated(
+  "managers/{managerId}/employees/{employeeId}",
+  async (event) => {
+    const snapshot = event.data;
+    if (!snapshot) {
+      logger.log("No data in employee document");
+      return;
+    }
+
+    const employeeData = snapshot.data();
+    const managerId = event.params.managerId;
+    const employeeId = event.params.employeeId;
+    const email = employeeData.email;
+
+    // Skip if no email provided
+    if (!email) {
+      logger.log(`Employee ${employeeId} has no email, skipping account creation`);
+      return;
+    }
+
+    logger.log(`Creating account for employee ${employeeId} (manager: ${managerId}) with email ${email}`);
+
+    try {
+      // Check if user already exists
+      let userRecord;
+      try {
+        userRecord = await auth.getUserByEmail(email);
+        logger.log(`User already exists with uid: ${userRecord.uid}`);
+      } catch (error: unknown) {
+        // User doesn't exist, create new account
+        if ((error as { code?: string }).code === "auth/user-not-found") {
+          userRecord = await auth.createUser({
+            email: email,
+            emailVerified: false,
+            disabled: false,
+          });
+          logger.log(`Created new user with uid: ${userRecord.uid}`);
+        } else {
+          throw error;
+        }
+      }
+
+      // Create or update user document with role
+      await db.collection("users").doc(userRecord.uid).set({
+        email: email,
+        employeeId: parseInt(employeeId) || employeeId,
+        managerUid: managerId,
+        role: "employee",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+
+      // Update employee document with uid
+      await snapshot.ref.update({
+        uid: userRecord.uid,
+        accountCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // Generate password reset link and send email
+      const resetLink = await auth.generatePasswordResetLink(email);
+      logger.log(`Password reset link generated for ${email}: ${resetLink}`);
+
+      logger.log(`Account setup complete for employee ${employeeId}`);
+    } catch (error) {
+      logger.error(`Error creating account for employee ${employeeId}:`, error);
+      throw error;
+    }
+  }
+);
+
+/**
+ * Triggered when an employee document is updated in a manager's subcollection.
+ * If the email field was added or changed, handles account creation/update.
+ */
+export const onEmployeeUpdatedInManager = onDocumentUpdated(
+  "managers/{managerId}/employees/{employeeId}",
+  async (event) => {
+    const beforeData = event.data?.before.data();
+    const afterData = event.data?.after.data();
+    const managerId = event.params.managerId;
+    const employeeId = event.params.employeeId;
+
+    if (!beforeData || !afterData) {
+      logger.log("Missing data in employee update");
+      return;
+    }
+
+    const oldEmail = beforeData.email;
+    const newEmail = afterData.email;
+
+    // Skip if email hasn't changed or was removed
+    if (!newEmail || oldEmail === newEmail) {
+      return;
+    }
+
+    logger.log(`Email changed for employee ${employeeId} (manager: ${managerId}): ${oldEmail} -> ${newEmail}`);
+
+    try {
+      // If there was an old account, we might want to update or create new
+      if (afterData.uid) {
+        // Update existing auth user's email
+        try {
+          await auth.updateUser(afterData.uid, { email: newEmail });
+          logger.log(`Updated email for uid ${afterData.uid}`);
+          
+          // Send password reset to new email
+          await auth.generatePasswordResetLink(newEmail);
+          logger.log(`Password reset sent to new email ${newEmail}`);
+        } catch (error) {
+          logger.error(`Error updating user email:`, error);
+          throw error;
+        }
+      } else {
+        // No existing uid, create new account (same logic as onCreate)
+        let userRecord;
+        try {
+          userRecord = await auth.getUserByEmail(newEmail);
+        } catch (error: unknown) {
+          if ((error as { code?: string }).code === "auth/user-not-found") {
+            userRecord = await auth.createUser({
+              email: newEmail,
+              emailVerified: false,
+              disabled: false,
+            });
+          } else {
+            throw error;
+          }
+        }
+
+        // Create user document
+        await db.collection("users").doc(userRecord.uid).set({
+          email: newEmail,
+          employeeId: parseInt(employeeId) || employeeId,
+          managerUid: managerId,
+          role: "employee",
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+
+        // Update employee with uid
+        await event.data?.after.ref.update({
+          uid: userRecord.uid,
+          accountCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        // Send password reset
+        await auth.generatePasswordResetLink(newEmail);
+        logger.log(`Account created and reset email sent to ${newEmail}`);
+      }
+    } catch (error) {
+      logger.error(`Error handling email update for employee ${employeeId}:`, error);
+      throw error;
+    }
+  }
+);
+
+// ============== LEGACY ROOT COLLECTION TRIGGERS ==============
+// Keep these for backwards compatibility with existing data
+
+/**
  * Triggered when a new employee document is created.
  * If the employee has an email, creates a Firebase Auth account
  * and sends a password reset email.
@@ -481,6 +643,9 @@ export const onSchedulePublished = onDocumentCreated(
 /**
  * Manually sync all existing employees to create Firebase Auth accounts.
  * Call this once to set up accounts for employees created before Cloud Functions were deployed.
+ * 
+ * Supports both per-manager subcollections (managers/{uid}/employees) and
+ * the legacy root employees collection.
  */
 export const syncAllEmployeeAccounts = onCall(async (request) => {
   // Verify caller is a manager
@@ -493,6 +658,8 @@ export const syncAllEmployeeAccounts = onCall(async (request) => {
     throw new HttpsError("permission-denied", "Only managers can sync employee accounts");
   }
 
+  const managerUid = request.data?.managerUid || request.auth.uid;
+
   const results = {
     total: 0,
     created: 0,
@@ -502,7 +669,13 @@ export const syncAllEmployeeAccounts = onCall(async (request) => {
   };
 
   try {
-    const employeesSnapshot = await db.collection("employees").get();
+    // Get employees from the manager's subcollection
+    const employeesSnapshot = await db
+      .collection("managers")
+      .doc(managerUid)
+      .collection("employees")
+      .get();
+    
     results.total = employeesSnapshot.size;
 
     for (const doc of employeesSnapshot.docs) {
@@ -555,6 +728,7 @@ export const syncAllEmployeeAccounts = onCall(async (request) => {
         await db.collection("users").doc(userRecord.uid).set({
           email: email,
           employeeId: parseInt(doc.id) || doc.id,
+          managerUid: managerUid,
           role: "employee",
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
         }, { merge: true });

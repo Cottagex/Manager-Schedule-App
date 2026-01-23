@@ -11,6 +11,7 @@ import 'pages/login_page.dart';
 import 'services/app_colors.dart';
 import 'services/auth_service.dart';
 import 'services/theme_service.dart';
+import 'services/auto_sync_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -72,6 +73,13 @@ class AuthWrapper extends StatefulWidget {
 }
 
 class _AuthWrapperState extends State<AuthWrapper> {
+  @override
+  void initState() {
+    super.initState();
+    // Initialize auto-sync service (it will check if enabled in settings)
+    AutoSyncService.instance.initialize();
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<User?>(

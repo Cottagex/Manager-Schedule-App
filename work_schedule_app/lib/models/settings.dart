@@ -9,6 +9,7 @@ class Settings {
   final int inventoryDay;
   final int scheduleStartDay;
   final bool blockOverlaps; // If true, block creating vacations that overlap existing time off
+  final bool autoSyncEnabled; // If true, automatically sync data to cloud on changes
 
   const Settings({
     required this.id,
@@ -21,6 +22,7 @@ class Settings {
     required this.inventoryDay,
     required this.scheduleStartDay,
     required this.blockOverlaps,
+    this.autoSyncEnabled = false,
   });
 
   // ---------------------------------------------------------------------------
@@ -38,6 +40,7 @@ class Settings {
       inventoryDay: map['inventoryDay'] as int,
       scheduleStartDay: map['scheduleStartDay'] as int,
       blockOverlaps: (map['blockOverlaps'] ?? 0) == 1,
+      autoSyncEnabled: (map['autoSyncEnabled'] ?? 0) == 1,
     );
   }
 
@@ -56,6 +59,7 @@ class Settings {
       'inventoryDay': inventoryDay,
       'scheduleStartDay': scheduleStartDay,
       'blockOverlaps': blockOverlaps ? 1 : 0,
+      'autoSyncEnabled': autoSyncEnabled ? 1 : 0,
     };
   }
 
@@ -73,6 +77,7 @@ class Settings {
     int? inventoryDay,
     int? scheduleStartDay,
     bool? blockOverlaps,
+    bool? autoSyncEnabled,
   }) {
     return Settings(
       id: id ?? this.id,
@@ -88,6 +93,7 @@ class Settings {
       inventoryDay: inventoryDay ?? this.inventoryDay,
       scheduleStartDay: scheduleStartDay ?? this.scheduleStartDay,
       blockOverlaps: blockOverlaps ?? this.blockOverlaps,
+      autoSyncEnabled: autoSyncEnabled ?? this.autoSyncEnabled,
     );
   }
 

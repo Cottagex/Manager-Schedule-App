@@ -36,7 +36,8 @@ Future<void> _onCreate(Database db, int version) async {
       minimumHoursBetweenShifts INTEGER NOT NULL DEFAULT 0,
       inventoryDay INTEGER NOT NULL DEFAULT 0,
       scheduleStartDay INTEGER NOT NULL DEFAULT 0,
-      blockOverlaps INTEGER NOT NULL DEFAULT 0
+      blockOverlaps INTEGER NOT NULL DEFAULT 0,
+      autoSyncEnabled INTEGER NOT NULL DEFAULT 0
     )
   ''');
 
@@ -304,7 +305,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 22,
+      version: 23,
       onCreate: _onCreate,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -667,6 +668,14 @@ class AppDatabase {
             CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_email 
             ON employees(email) WHERE email IS NOT NULL
           ''');
+        }
+        if (oldVersion < 23) {
+          // Add autoSyncEnabled column to settings
+          try {
+            await db.execute('ALTER TABLE settings ADD COLUMN autoSyncEnabled INTEGER NOT NULL DEFAULT 0');
+          } catch (_) {
+            // Column may already exist
+          }
         }
       },
     );

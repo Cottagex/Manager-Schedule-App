@@ -1,5 +1,6 @@
 import 'package:sqflite/sqflite.dart';
 import '../models/employee.dart';
+import '../services/auto_sync_service.dart';
 import 'app_database.dart';
 
 class EmployeeDao {
@@ -23,11 +24,17 @@ class EmployeeDao {
 
   Future<int> insertEmployee(Employee employee) async {
     final db = await AppDatabase.instance.db;
-    return await db.insert(
+    final id = await db.insert(
       'employees',
       employee.toMap(),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    
+    // Notify auto-sync service of the change
+    final insertedEmployee = employee.copyWith(id: id);
+    AutoSyncService.instance.onEmployeeChanged(insertedEmployee);
+    
+    return id;
   }
 
   Future<int> updateEmployee(Employee employee) async {
@@ -37,20 +44,30 @@ class EmployeeDao {
       throw Exception("Cannot update employee without an ID");
     }
 
-    return await db.update(
+    final result = await db.update(
       'employees',
       employee.toMap(),
       where: 'id = ?',
       whereArgs: [employee.id],
     );
+    
+    // Notify auto-sync service of the change
+    AutoSyncService.instance.onEmployeeChanged(employee);
+    
+    return result;
   }
 
   Future<int> deleteEmployee(int id) async {
     final db = await AppDatabase.instance.db;
-    return await db.delete(
+    final result = await db.delete(
       'employees',
       where: 'id = ?',
       whereArgs: [id],
     );
+    
+    // Notify auto-sync service of the deletion
+    AutoSyncService.instance.onEmployeeDeleted(id);
+    
+    return result;
   }
 }

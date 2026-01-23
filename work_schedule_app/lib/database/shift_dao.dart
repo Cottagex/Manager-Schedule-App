@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 import 'app_database.dart';
 import '../models/shift.dart';
+import '../services/auto_sync_service.dart';
 
 class ShiftDao {
   Future<Database> get _db async => await AppDatabase.instance.db;
@@ -31,24 +32,39 @@ class ShiftDao {
   /// Insert a new shift
   Future<int> insert(Shift shift) async {
     final db = await _db;
-    return await db.insert('shifts', shift.toMap());
+    final id = await db.insert('shifts', shift.toMap());
+    
+    // Notify auto-sync service of the change
+    AutoSyncService.instance.onShiftsChanged();
+    
+    return id;
   }
 
   /// Update an existing shift
   Future<int> update(Shift shift) async {
     final db = await _db;
-    return await db.update(
+    final result = await db.update(
       'shifts',
       shift.copyWith(updatedAt: DateTime.now()).toMap(),
       where: 'id = ?',
       whereArgs: [shift.id],
     );
+    
+    // Notify auto-sync service of the change
+    AutoSyncService.instance.onShiftsChanged();
+    
+    return result;
   }
 
   /// Delete a shift by ID
   Future<int> delete(int id) async {
     final db = await _db;
-    return await db.delete('shifts', where: 'id = ?', whereArgs: [id]);
+    final result = await db.delete('shifts', where: 'id = ?', whereArgs: [id]);
+    
+    // Notify auto-sync service of the change
+    AutoSyncService.instance.onShiftsChanged();
+    
+    return result;
   }
 
   /// Delete all shifts for an employee on a specific date
@@ -57,11 +73,16 @@ class ShiftDao {
     final startOfDay = DateTime(date.year, date.month, date.day);
     final endOfDay = startOfDay.add(const Duration(days: 1));
     
-    return await db.delete(
+    final result = await db.delete(
       'shifts',
       where: 'employeeId = ? AND startTime >= ? AND startTime < ?',
       whereArgs: [employeeId, startOfDay.toIso8601String(), endOfDay.toIso8601String()],
     );
+    
+    // Notify auto-sync service of the change
+    AutoSyncService.instance.onShiftsChanged();
+    
+    return result;
   }
 
   /// Get all shifts
@@ -199,15 +220,23 @@ class ShiftDao {
       batch.insert('shifts', shift.toMap());
     }
     await batch.commit(noResult: true);
+    
+    // Notify auto-sync service of the change
+    AutoSyncService.instance.onShiftsChanged();
   }
 
   /// Delete all shifts in a date range (useful for clearing a week)
   Future<int> deleteByDateRange(DateTime start, DateTime end) async {
     final db = await _db;
-    return await db.delete(
+    final result = await db.delete(
       'shifts',
       where: 'startTime >= ? AND startTime < ?',
       whereArgs: [start.toIso8601String(), end.toIso8601String()],
     );
+    
+    // Notify auto-sync service of the change
+    AutoSyncService.instance.onShiftsChanged();
+    
+    return result;
   }
 }

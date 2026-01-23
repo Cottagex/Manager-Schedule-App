@@ -24,6 +24,60 @@ service cloud.firestore {
       allow update: if request.auth != null && (request.auth.uid == uid || isManager());
     }
     
+    // Manager Settings - each manager can only access their own settings
+    match /managerSettings/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid && isManager();
+    }
+
+    // ============== PER-MANAGER DATA ==============
+    // Each manager has their own subcollections for employees, shifts, time-off, etc.
+    
+    match /managers/{managerUid} {
+      // Manager can access their own root document
+      allow read, write: if request.auth != null && request.auth.uid == managerUid && isManager();
+      
+      // Employees subcollection - manager writes, employees read own
+      match /employees/{docId} {
+        allow read: if request.auth != null && 
+                      (request.auth.uid == managerUid || 
+                       isOwnEmployee(resource.data.email));
+        allow write: if request.auth != null && request.auth.uid == managerUid && isManager();
+      }
+      
+      // Shifts subcollection - manager writes, employees read own shifts
+      match /shifts/{docId} {
+        allow read: if request.auth != null && 
+                      (request.auth.uid == managerUid || 
+                       resource.data.employeeUid == request.auth.uid);
+        allow write: if request.auth != null && request.auth.uid == managerUid && isManager();
+      }
+      
+      // Published schedules metadata - manager only
+      match /publishedSchedules/{docId} {
+        allow read, write: if request.auth != null && request.auth.uid == managerUid && isManager();
+      }
+      
+      // Time off entries - manager writes, employees read own
+      match /timeOff/{docId} {
+        allow read: if request.auth != null && 
+                      (request.auth.uid == managerUid || 
+                       resource.data.employeeUid == request.auth.uid);
+        allow write: if request.auth != null && request.auth.uid == managerUid && isManager();
+      }
+      
+      // Time off requests - employees create own, manager approves/denies
+      match /timeOffRequests/{docId} {
+        allow read: if request.auth != null && 
+                      (request.auth.uid == managerUid || 
+                       resource.data.employeeUid == request.auth.uid);
+        allow create: if request.auth != null && 
+                         request.resource.data.employeeUid == request.auth.uid;
+        allow update: if request.auth != null && request.auth.uid == managerUid && isManager();
+      }
+    }
+
+    // ============== LEGACY ROOT COLLECTIONS (keeping for backwards compatibility) ==============
+    
     // Employees - managers write, employees read own
     match /employees/{docId} {
       allow read: if request.auth != null && (isManager() || isOwnEmployee(resource.data.email));
