@@ -1,0 +1,104 @@
+name: Build and Publish to Microsoft Store
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v2.0.1
+  workflow_dispatch:  # Allows manual trigger
+
+env:
+  FLUTTER_VERSION: '3.27.0'
+
+jobs:
+  build-and-publish:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        working-directory: work_schedule_app
+        run: flutter pub get
+
+      - name: Build Windows release
+        working-directory: work_schedule_app
+        run: flutter build windows --release
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: '3.5'
+
+      - name: Create MSIX for Store
+        working-directory: work_schedule_app
+        run: dart run msix:create
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: '3.5'
+
+      - name: Upload MSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScheduleHQ-Store-MSIX
+          path: work_schedule_app/build/windows/x64/runner/Release/*.msix
+
+      - name: Publish to Microsoft Store
+        uses: isaacrlevin/windows-store-action@v1.0
+        with:
+          tenant-id: ${{ secrets.AZURE_AD_TENANT_ID }}
+          client-id: ${{ secrets.AZURE_AD_CLIENT_ID }}
+          client-secret: ${{ secrets.AZURE_AD_CLIENT_SECRET }}
+          app-id: ${{ secrets.STORE_APP_ID }}
+          package-path: work_schedule_app/build/windows/x64/runner/Release/work_schedule_app.msix
+
+  # Also build for GitHub Releases (self-signed version)
+  build-github-release:
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        working-directory: work_schedule_app
+        run: flutter pub get
+
+      - name: Build Windows release
+        working-directory: work_schedule_app
+        run: flutter build windows --release
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: '3.5'
+
+      - name: Create self-signed MSIX for GitHub
+        working-directory: work_schedule_app
+        run: |
+          # Temporarily switch to self-signed config for GitHub release
+          dart run msix:create --certificate-password ${{ secrets.CERTIFICATE_PASSWORD }}
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: '3.5'
+
+      - name: Rename MSIX
+        run: |
+          Move-Item "work_schedule_app/build/windows/x64/runner/Release/work_schedule_app.msix" "work_schedule_app/build/windows/x64/runner/Release/ScheduleHQ.msix"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            work_schedule_app/build/windows/x64/runner/Release/ScheduleHQ.msix
+            work_schedule_app/installer/ManagerScheduleApp.appinstaller
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
