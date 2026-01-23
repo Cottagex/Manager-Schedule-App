@@ -2,7 +2,11 @@ name: work_schedule_app
 description: "Workforce scheduling and PTO management app."
 publish_to: 'none'
 
-version: 2.0.0+1
+# When bumping the version, also update:
+#   - pubspec.yaml: msix_version (below)
+#   - pubspec_store.yaml: version and msix_version
+#   - lib/services/update_service.dart: currentVersion constant
+version: 2.1.0+1
 
 environment:
   sdk: ^3.10.7
@@ -55,7 +59,7 @@ msix_config:
   publisher_display_name: JasonSjogren
   identity_name: com.jasons.schedulehq
   publisher: CN=Manager Schedule App, O=Jason S
-  msix_version: 2.0.0.0
+  msix_version: 2.1.0.0
   logo_path: windows/runner/resources/app_icon.ico
   certificate_path: certs/ManagerScheduleApp.pfx
   # store: true  # Uncomment for Microsoft Store builds
