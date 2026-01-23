@@ -23,7 +23,7 @@ android {
         applicationId = "com.schedulehq.employee"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = 21
+        minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -48,4 +48,9 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Add Play Feature Delivery library (modular replacement for play-core)
+    implementation("com.google.android.play:feature-delivery:2.1.0")
 }
