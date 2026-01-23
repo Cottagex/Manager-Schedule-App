@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check manager role
+    function isManager() {
+      return request.auth != null && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "manager";
+    }
+    
+    // Helper function to check if user owns this employee record
+    function isOwnEmployee(email) {
+      return request.auth != null && request.auth.token.email == email;
+    }
+    
+    // Employees - managers write, employees read own
+    match /employees/{docId} {
+      allow read: if isManager() || isOwnEmployee(resource.data.email);
+      allow write: if isManager();
+    }
+    
+    // Schedules - managers write, employees read own
+    match /schedules/{docId} {
+      allow read: if request.auth != null;
+      allow write: if isManager();
+    }
+    
+    // Time off requests - employees create own, managers update
+    match /timeOffRequests/{docId} {
+      allow read: if isManager() || 
+                     resource.data.employeeEmail == request.auth.token.email;
+      allow create: if request.auth != null && 
+                       request.resource.data.employeeEmail == request.auth.token.email;
+      allow update: if isManager();
+    }
+    
+    // Users - own profile readable, managers can read all
+    match /users/{uid} {
+      allow read: if request.auth.uid == uid || isManager();
+      allow create, update: if request.auth.uid == uid || isManager();
+    }
+  }
+}

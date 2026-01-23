@@ -24,6 +24,7 @@ import '../../models/store_hours.dart';
 import '../../services/app_colors.dart';
 import '../../services/schedule_pdf_service.dart';
 import '../../services/schedule_undo_manager.dart';
+import '../../services/firestore_sync_service.dart';
 import 'shift_runner_table.dart';
 
 // Custom intents for keyboard shortcuts
@@ -556,6 +557,40 @@ class _ScheduleViewState extends State<ScheduleView> {
       await _clearWeek(weekStartDate);
     } else if (action == 'autoFillFromTemplates') {
       await _autoFillFromTemplates(weekStartDate);
+    }
+  }
+
+  Future<void> _showPublishDialog(BuildContext context) async {
+    // Calculate date range based on current view
+    DateTime startDate;
+    DateTime endDate;
+    
+    if (_mode == ScheduleMode.weekly) {
+      final weekStart = _date.subtract(Duration(days: _date.weekday % 7));
+      startDate = DateTime(weekStart.year, weekStart.month, weekStart.day);
+      endDate = startDate.add(const Duration(days: 6));
+    } else {
+      // Monthly - first and last day of month
+      startDate = DateTime(_date.year, _date.month, 1);
+      endDate = DateTime(_date.year, _date.month + 1, 0);
+    }
+    
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => _PublishScheduleDialog(
+        startDate: startDate,
+        endDate: endDate,
+        employees: _employees,
+      ),
+    );
+    
+    if (result == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Schedule published to employees'),
+          backgroundColor: Colors.green,
+        ),
+      );
     }
   }
 
@@ -1112,6 +1147,14 @@ class _ScheduleViewState extends State<ScheduleView> {
               ),
             ),
           ],
+        ),
+        // Publish to Employees button
+        Tooltip(
+          message: 'Publish schedule to employee app',
+          child: IconButton(
+            icon: const Icon(Icons.cloud_upload),
+            onPressed: () => _showPublishDialog(context),
+          ),
         ),
         if (_mode == ScheduleMode.weekly)
           PopupMenuButton<String>(
@@ -5991,6 +6034,252 @@ class _AutoFillFromWeeklyTemplatesDialogState extends State<_AutoFillFromWeeklyT
                     'skipExisting': _skipExisting,
                     'overrideExisting': _overrideExisting,
                   }),
+        ),
+      ],
+    );
+  }
+}
+
+/// Dialog for publishing schedules to employee app
+class _PublishScheduleDialog extends StatefulWidget {
+  final DateTime startDate;
+  final DateTime endDate;
+  final List<Employee> employees;
+
+  const _PublishScheduleDialog({
+    required this.startDate,
+    required this.endDate,
+    required this.employees,
+  });
+
+  @override
+  State<_PublishScheduleDialog> createState() => _PublishScheduleDialogState();
+}
+
+class _PublishScheduleDialogState extends State<_PublishScheduleDialog> {
+  late DateTime _startDate;
+  late DateTime _endDate;
+  bool _publishAll = true;
+  final Set<int> _selectedEmployeeIds = {};
+  bool _publishing = false;
+  String? _lastPublishInfo;
+
+  @override
+  void initState() {
+    super.initState();
+    _startDate = widget.startDate;
+    _endDate = widget.endDate;
+    _loadLastPublishInfo();
+  }
+
+  Future<void> _loadLastPublishInfo() async {
+    final info = await FirestoreSyncService.instance.getLastPublishInfo(
+      startDate: _startDate,
+      endDate: _endDate,
+    );
+    if (info != null && mounted) {
+      final publishedAt = info['publishedAt'];
+      if (publishedAt != null) {
+        setState(() {
+          _lastPublishInfo = 'Last published: ${_formatTimestamp(publishedAt)}';
+        });
+      }
+    }
+  }
+
+  String _formatTimestamp(dynamic timestamp) {
+    if (timestamp is DateTime) {
+      return '${timestamp.month}/${timestamp.day}/${timestamp.year} at ${timestamp.hour}:${timestamp.minute.toString().padLeft(2, '0')}';
+    }
+    return 'Unknown';
+  }
+
+  Future<void> _publish() async {
+    setState(() => _publishing = true);
+    
+    try {
+      final result = await FirestoreSyncService.instance.publishSchedule(
+        startDate: _startDate,
+        endDate: _endDate,
+        employeeIds: _publishAll ? null : _selectedEmployeeIds.toList(),
+      );
+      
+      if (mounted) {
+        if (result.success) {
+          Navigator.pop(context, true);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(result.message),
+              backgroundColor: Colors.red,
+            ),
+          );
+          setState(() => _publishing = false);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error publishing: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        setState(() => _publishing = false);
+      }
+    }
+  }
+
+  Future<void> _selectDate(bool isStart) async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: isStart ? _startDate : _endDate,
+      firstDate: DateTime.now().subtract(const Duration(days: 365)),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+    if (picked != null) {
+      setState(() {
+        if (isStart) {
+          _startDate = picked;
+          if (_endDate.isBefore(_startDate)) {
+            _endDate = _startDate;
+          }
+        } else {
+          _endDate = picked;
+          if (_startDate.isAfter(_endDate)) {
+            _startDate = _endDate;
+          }
+        }
+      });
+      _loadLastPublishInfo();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.cloud_upload, color: Colors.blue),
+          SizedBox(width: 8),
+          Text('Publish Schedule'),
+        ],
+      ),
+      content: SizedBox(
+        width: 400,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Publish the schedule to make it visible in the employee app.',
+              style: TextStyle(color: Colors.grey),
+            ),
+            const SizedBox(height: 16),
+            
+            // Date range selector
+            Row(
+              children: [
+                Expanded(
+                  child: InkWell(
+                    onTap: () => _selectDate(true),
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: 'From',
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                      child: Text(
+                        '${_startDate.month}/${_startDate.day}/${_startDate.year}',
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: InkWell(
+                    onTap: () => _selectDate(false),
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: 'To',
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                      child: Text(
+                        '${_endDate.month}/${_endDate.day}/${_endDate.year}',
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            
+            // Employee selection
+            CheckboxListTile(
+              title: const Text('Publish for all employees'),
+              value: _publishAll,
+              contentPadding: EdgeInsets.zero,
+              onChanged: (v) => setState(() => _publishAll = v ?? true),
+            ),
+            
+            if (!_publishAll) ...[
+              const Divider(),
+              const Text('Select employees:', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 200,
+                child: ListView.builder(
+                  itemCount: widget.employees.length,
+                  itemBuilder: (ctx, i) {
+                    final emp = widget.employees[i];
+                    return CheckboxListTile(
+                      title: Text(emp.name),
+                      subtitle: Text(emp.jobCode),
+                      value: _selectedEmployeeIds.contains(emp.id),
+                      dense: true,
+                      onChanged: (v) {
+                        setState(() {
+                          if (v == true) {
+                            _selectedEmployeeIds.add(emp.id!);
+                          } else {
+                            _selectedEmployeeIds.remove(emp.id);
+                          }
+                        });
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+            
+            if (_lastPublishInfo != null) ...[
+              const Divider(),
+              Text(
+                _lastPublishInfo!,
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _publishing ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton.icon(
+          onPressed: _publishing || (!_publishAll && _selectedEmployeeIds.isEmpty)
+              ? null
+              : _publish,
+          icon: _publishing
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.cloud_upload),
+          label: Text(_publishing ? 'Publishing...' : 'Publish'),
         ),
       ],
     );

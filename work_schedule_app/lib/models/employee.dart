@@ -3,7 +3,11 @@ class Employee {
   final String name;
   final String jobCode;
 
-  // NEW FIELDS
+  // Firebase sync fields
+  final String? email;
+  final String? uid; // Firebase Auth UID
+
+  // Vacation tracking
   final int vacationWeeksAllowed;
   final int vacationWeeksUsed;
 
@@ -11,6 +15,8 @@ class Employee {
     this.id,
     required this.name,
     required this.jobCode,
+    this.email,
+    this.uid,
     this.vacationWeeksAllowed = 0,
     this.vacationWeeksUsed = 0,
   });
@@ -19,6 +25,8 @@ class Employee {
     int? id,
     String? name,
     String? jobCode,
+    String? email,
+    String? uid,
     int? vacationWeeksAllowed,
     int? vacationWeeksUsed,
   }) {
@@ -26,6 +34,8 @@ class Employee {
       id: id ?? this.id,
       name: name ?? this.name,
       jobCode: jobCode ?? this.jobCode,
+      email: email ?? this.email,
+      uid: uid ?? this.uid,
       vacationWeeksAllowed:
           vacationWeeksAllowed ?? this.vacationWeeksAllowed,
       vacationWeeksUsed: vacationWeeksUsed ?? this.vacationWeeksUsed,
@@ -37,6 +47,8 @@ class Employee {
       'id': id,
       'name': name,
       'jobCode': jobCode,
+      'email': email,
+      'uid': uid,
       'vacationWeeksAllowed': vacationWeeksAllowed,
       'vacationWeeksUsed': vacationWeeksUsed,
     };
@@ -47,6 +59,8 @@ class Employee {
       id: map['id'],
       name: map['name'],
       jobCode: map['jobCode'],
+      email: map['email'],
+      uid: map['uid'],
       vacationWeeksAllowed: map['vacationWeeksAllowed'] ?? 0,
       vacationWeeksUsed: map['vacationWeeksUsed'] ?? 0,
     );

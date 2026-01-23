@@ -6,7 +6,9 @@ import 'pages/roster_page.dart';
 import 'package:work_schedule_app/pages/settings_page.dart';
 import 'pages/pto_vac_tracker_page.dart';
 import 'pages/analytics_page.dart';
+import 'pages/approval_queue_page.dart';
 import 'services/app_colors.dart';
+import 'services/auth_service.dart';
 import 'services/update_service.dart';
 
 class NavigationShell extends StatefulWidget {
@@ -26,6 +28,7 @@ class _NavigationShellState extends State<NavigationShell> {
     TimeOffPage(),
     RosterPage(),
     PtoVacTrackerPage(),
+    ApprovalQueuePage(),
     AnalyticsPage(),
     SettingsPage(),
   ];
@@ -140,6 +143,10 @@ class _NavigationShellState extends State<NavigationShell> {
                         label: Text("PTO / VAC"),
                       ),
                       NavigationRailDestination(
+                        icon: Icon(Icons.approval),
+                        label: Text("Approvals"),
+                      ),
+                      NavigationRailDestination(
                         icon: Icon(Icons.analytics),
                         label: Text("Analytics"),
                       ),
@@ -152,6 +159,8 @@ class _NavigationShellState extends State<NavigationShell> {
                 ),
                 // Update button at the bottom of navigation rail
                 _buildUpdateButton(),
+                // Logout button
+                _buildLogoutButton(),
               ],
             ),
 
@@ -188,6 +197,10 @@ class _NavigationShellState extends State<NavigationShell> {
                       label: "PTO / VAC",
                     ),
                     NavigationDestination(
+                      icon: Icon(Icons.approval),
+                      label: "Approvals",
+                    ),
+                    NavigationDestination(
                       icon: Icon(Icons.analytics),
                       label: "Analytics",
                     ),
@@ -199,6 +212,38 @@ class _NavigationShellState extends State<NavigationShell> {
                 ),
               ],
             ),
+    );
+  }
+
+  Widget _buildLogoutButton() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: TextButton.icon(
+        onPressed: () async {
+          final confirmed = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Sign Out'),
+              content: const Text('Are you sure you want to sign out?'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('Sign Out'),
+                ),
+              ],
+            ),
+          );
+          if (confirmed == true) {
+            await AuthService.instance.signOut();
+          }
+        },
+        icon: const Icon(Icons.logout, size: 16),
+        label: const Text('Sign Out', style: TextStyle(fontSize: 12)),
+      ),
     );
   }
 

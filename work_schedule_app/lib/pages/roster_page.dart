@@ -3,6 +3,7 @@ import '../database/employee_dao.dart';
 import '../models/employee.dart';
 import '../database/job_code_settings_dao.dart';
 import '../models/job_code_settings.dart';
+import '../services/firestore_sync_service.dart';
 import 'employee_availability_page.dart';
 import 'weekly_template_dialog.dart';
 import '../widgets/csv_import_dialog.dart';
@@ -76,6 +77,7 @@ class _RosterPageState extends State<RosterPage> {
   Future<void> _addEmployee() async {
     String name = "";
     String jobCode = _jobCodes.isNotEmpty ? _jobCodes.first.code : "Assistant";
+    String? email;
     int vacationAllowed = 0;
 
     await showDialog(
@@ -83,42 +85,53 @@ class _RosterPageState extends State<RosterPage> {
       builder: (context) {
         return AlertDialog(
           title: const Text("Add Employee"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                decoration: const InputDecoration(labelText: "Name"),
-                onChanged: (v) => name = v,
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: jobCode,
-                decoration: const InputDecoration(labelText: "Job Code"),
-                items: _jobCodes
-                    .map(
-                      (jc) => DropdownMenuItem(
-                        value: jc.code,
-                        child: Text(jc.code),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (v) {
-                  if (v != null) {
-                    jobCode = v;
-                  }
-                },
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                decoration: const InputDecoration(
-                  labelText: "Vacation Weeks Allowed",
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  decoration: const InputDecoration(labelText: "Name"),
+                  onChanged: (v) => name = v,
                 ),
-                keyboardType: TextInputType.number,
-                onChanged: (v) {
-                  vacationAllowed = int.tryParse(v) ?? 0;
-                },
-              ),
-            ],
+                const SizedBox(height: 12),
+                TextField(
+                  decoration: const InputDecoration(
+                    labelText: "Email (for employee app login)",
+                    hintText: "employee@example.com",
+                  ),
+                  keyboardType: TextInputType.emailAddress,
+                  onChanged: (v) => email = v.trim().isEmpty ? null : v.trim(),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: jobCode,
+                  decoration: const InputDecoration(labelText: "Job Code"),
+                  items: _jobCodes
+                      .map(
+                        (jc) => DropdownMenuItem(
+                          value: jc.code,
+                          child: Text(jc.code),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) {
+                      jobCode = v;
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  decoration: const InputDecoration(
+                    labelText: "Vacation Weeks Allowed",
+                  ),
+                  keyboardType: TextInputType.number,
+                  onChanged: (v) {
+                    vacationAllowed = int.tryParse(v) ?? 0;
+                  },
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -129,14 +142,25 @@ class _RosterPageState extends State<RosterPage> {
               onPressed: () async {
                 if (name.trim().isEmpty) return;
 
-                await _employeeDao.insertEmployee(
-                  Employee(
-                    name: name.trim(),
-                    jobCode: jobCode,
-                    vacationWeeksAllowed: vacationAllowed,
-                    vacationWeeksUsed: 0,
-                  ),
+                final newEmployee = Employee(
+                  name: name.trim(),
+                  jobCode: jobCode,
+                  email: email,
+                  vacationWeeksAllowed: vacationAllowed,
+                  vacationWeeksUsed: 0,
                 );
+                final id = await _employeeDao.insertEmployee(newEmployee);
+                
+                // Sync to Firestore
+                try {
+                  await FirestoreSyncService.instance.syncEmployee(
+                    newEmployee.copyWith(id: id),
+                  );
+                } catch (e) {
+                  // Log error but don't block - sync can happen later
+                  debugPrint('Failed to sync employee to Firestore: $e');
+                }
+                
                 if (!mounted) return;
                 Navigator.of(this.context).pop();
                 await _loadEmployees();
@@ -152,6 +176,7 @@ class _RosterPageState extends State<RosterPage> {
   Future<void> _editEmployee(Employee e) async {
     String name = e.name;
     String jobCode = e.jobCode;
+    String? email = e.email;
     int vacationAllowed = e.vacationWeeksAllowed;
 
     await showDialog(
@@ -159,46 +184,64 @@ class _RosterPageState extends State<RosterPage> {
       builder: (context) {
         return AlertDialog(
           title: const Text("Edit Employee"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                decoration: const InputDecoration(labelText: "Name"),
-                controller: TextEditingController(text: name),
-                onChanged: (v) => name = v,
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: jobCode,
-                decoration: const InputDecoration(labelText: "Job Code"),
-                items: _jobCodes
-                    .map(
-                      (jc) => DropdownMenuItem(
-                        value: jc.code,
-                        child: Text(jc.code),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  if (value != null) {
-                    jobCode = value;
-                  }
-                },
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                decoration: const InputDecoration(
-                  labelText: "Vacation Weeks Allowed",
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  decoration: const InputDecoration(labelText: "Name"),
+                  controller: TextEditingController(text: name),
+                  onChanged: (v) => name = v,
                 ),
-                controller: TextEditingController(
-                  text: vacationAllowed.toString(),
+                const SizedBox(height: 12),
+                TextField(
+                  decoration: InputDecoration(
+                    labelText: "Email (for employee app login)",
+                    hintText: "employee@example.com",
+                    helperText: e.uid != null 
+                        ? "Account created ✓" 
+                        : "Add email to enable employee app access",
+                    helperStyle: TextStyle(
+                      color: e.uid != null ? Colors.green : null,
+                    ),
+                  ),
+                  controller: TextEditingController(text: email ?? ''),
+                  keyboardType: TextInputType.emailAddress,
+                  onChanged: (v) => email = v.trim().isEmpty ? null : v.trim(),
                 ),
-                keyboardType: TextInputType.number,
-                onChanged: (v) {
-                  vacationAllowed = int.tryParse(v) ?? e.vacationWeeksAllowed;
-                },
-              ),
-            ],
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: jobCode,
+                  decoration: const InputDecoration(labelText: "Job Code"),
+                  items: _jobCodes
+                      .map(
+                        (jc) => DropdownMenuItem(
+                          value: jc.code,
+                          child: Text(jc.code),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      jobCode = value;
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  decoration: const InputDecoration(
+                    labelText: "Vacation Weeks Allowed",
+                  ),
+                  controller: TextEditingController(
+                    text: vacationAllowed.toString(),
+                  ),
+                  keyboardType: TextInputType.number,
+                  onChanged: (v) {
+                    vacationAllowed = int.tryParse(v) ?? e.vacationWeeksAllowed;
+                  },
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -207,13 +250,21 @@ class _RosterPageState extends State<RosterPage> {
             ),
             ElevatedButton(
               onPressed: () async {
-                await _employeeDao.updateEmployee(
-                  e.copyWith(
-                    name: name.trim(),
-                    jobCode: jobCode,
-                    vacationWeeksAllowed: vacationAllowed,
-                  ),
+                final updatedEmployee = e.copyWith(
+                  name: name.trim(),
+                  jobCode: jobCode,
+                  email: email,
+                  vacationWeeksAllowed: vacationAllowed,
                 );
+                await _employeeDao.updateEmployee(updatedEmployee);
+                
+                // Sync to Firestore
+                try {
+                  await FirestoreSyncService.instance.syncEmployee(updatedEmployee);
+                } catch (err) {
+                  debugPrint('Failed to sync employee to Firestore: $err');
+                }
+                
                 if (!mounted) return;
                 Navigator.of(this.context).pop();
                 await _loadEmployees();
@@ -249,6 +300,14 @@ class _RosterPageState extends State<RosterPage> {
 
     if (confirm == true && e.id != null) {
       await _employeeDao.deleteEmployee(e.id!);
+      
+      // Sync deletion to Firestore
+      try {
+        await FirestoreSyncService.instance.deleteEmployee(e.id!);
+      } catch (err) {
+        debugPrint('Failed to delete employee from Firestore: $err');
+      }
+      
       await _loadEmployees();
     }
   }

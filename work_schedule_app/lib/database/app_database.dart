@@ -13,9 +13,16 @@ Future<void> _onCreate(Database db, int version) async {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       jobCode TEXT,
+      email TEXT,
+      uid TEXT,
       vacationWeeksAllowed INTEGER DEFAULT 0,
       vacationWeeksUsed INTEGER DEFAULT 0
     )
+  ''');
+
+  await db.execute('''
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_email 
+    ON employees(email) WHERE email IS NOT NULL
   ''');
 
   await db.execute('''
@@ -297,7 +304,7 @@ class AppDatabase {
 
     _db = await openDatabase(
       path,
-      version: 21,
+      version: 22,
       onCreate: _onCreate,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -641,6 +648,24 @@ class AppDatabase {
           await db.execute('''
             CREATE INDEX IF NOT EXISTS idx_weekly_templates_employee 
             ON employee_weekly_templates(employeeId)
+          ''');
+        }
+        if (oldVersion < 22) {
+          // Add email and uid columns to employees for Firebase sync
+          try {
+            await db.execute('ALTER TABLE employees ADD COLUMN email TEXT');
+          } catch (_) {
+            // Column may already exist
+          }
+          try {
+            await db.execute('ALTER TABLE employees ADD COLUMN uid TEXT');
+          } catch (_) {
+            // Column may already exist
+          }
+          // Create unique index on email (for employees that have one)
+          await db.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_email 
+            ON employees(email) WHERE email IS NOT NULL
           ''');
         }
       },

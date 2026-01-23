@@ -11,6 +11,13 @@ dependencies:
   flutter:
     sdk: flutter
 
+  # Firebase
+  firebase_core: ^3.9.0
+  firebase_auth: ^5.5.0
+  cloud_firestore: ^5.6.0
+  firebase_messaging: ^15.2.0
+  cloud_functions: ^5.3.0
+
   # Database
   sqflite: ^2.3.0
   sqflite_common_ffi:

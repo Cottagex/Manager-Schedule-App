@@ -1,0 +1,479 @@
+import * as admin from "firebase-admin";
+import { onDocumentCreated, onDocumentUpdated } from "firebase-functions/v2/firestore";
+import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { logger } from "firebase-functions/v2";
+
+// Initialize Firebase Admin
+admin.initializeApp();
+
+const auth = admin.auth();
+const db = admin.firestore();
+
+/**
+ * Triggered when a new employee document is created.
+ * If the employee has an email, creates a Firebase Auth account
+ * and sends a password reset email.
+ */
+export const onEmployeeCreated = onDocumentCreated(
+  "employees/{employeeId}",
+  async (event) => {
+    const snapshot = event.data;
+    if (!snapshot) {
+      logger.log("No data in employee document");
+      return;
+    }
+
+    const employeeData = snapshot.data();
+    const employeeId = event.params.employeeId;
+    const email = employeeData.email;
+
+    // Skip if no email provided
+    if (!email) {
+      logger.log(`Employee ${employeeId} has no email, skipping account creation`);
+      return;
+    }
+
+    logger.log(`Creating account for employee ${employeeId} with email ${email}`);
+
+    try {
+      // Check if user already exists
+      let userRecord;
+      try {
+        userRecord = await auth.getUserByEmail(email);
+        logger.log(`User already exists with uid: ${userRecord.uid}`);
+      } catch (error: unknown) {
+        // User doesn't exist, create new account
+        if ((error as { code?: string }).code === "auth/user-not-found") {
+          userRecord = await auth.createUser({
+            email: email,
+            emailVerified: false,
+            disabled: false,
+          });
+          logger.log(`Created new user with uid: ${userRecord.uid}`);
+        } else {
+          throw error;
+        }
+      }
+
+      // Create or update user document with role
+      await db.collection("users").doc(userRecord.uid).set({
+        email: email,
+        employeeId: parseInt(employeeId) || employeeId,
+        role: "employee",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+
+      // Update employee document with uid
+      await snapshot.ref.update({
+        uid: userRecord.uid,
+        accountCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // Generate password reset link and send email
+      const resetLink = await auth.generatePasswordResetLink(email);
+      logger.log(`Password reset link generated for ${email}: ${resetLink}`);
+
+      // Note: Firebase Auth automatically sends the reset email when you call
+      // generatePasswordResetLink. If you want custom email, use sendEmail here.
+
+      logger.log(`Account setup complete for employee ${employeeId}`);
+    } catch (error) {
+      logger.error(`Error creating account for employee ${employeeId}:`, error);
+      throw error;
+    }
+  }
+);
+
+/**
+ * Triggered when an employee document is updated.
+ * If the email field was added or changed, handles account creation/update.
+ */
+export const onEmployeeUpdated = onDocumentUpdated(
+  "employees/{employeeId}",
+  async (event) => {
+    const beforeData = event.data?.before.data();
+    const afterData = event.data?.after.data();
+    const employeeId = event.params.employeeId;
+
+    if (!beforeData || !afterData) {
+      logger.log("Missing data in employee update");
+      return;
+    }
+
+    const oldEmail = beforeData.email;
+    const newEmail = afterData.email;
+
+    // Skip if email hasn't changed or was removed
+    if (!newEmail || oldEmail === newEmail) {
+      return;
+    }
+
+    logger.log(`Email changed for employee ${employeeId}: ${oldEmail} -> ${newEmail}`);
+
+    try {
+      // If there was an old account, we might want to update or create new
+      if (afterData.uid) {
+        // Update existing auth user's email
+        try {
+          await auth.updateUser(afterData.uid, { email: newEmail });
+          logger.log(`Updated email for uid ${afterData.uid}`);
+          
+          // Send password reset to new email
+          await auth.generatePasswordResetLink(newEmail);
+          logger.log(`Password reset sent to new email ${newEmail}`);
+        } catch (error) {
+          logger.error(`Error updating user email:`, error);
+          throw error;
+        }
+      } else {
+        // No existing uid, create new account (same logic as onCreate)
+        let userRecord;
+        try {
+          userRecord = await auth.getUserByEmail(newEmail);
+        } catch (error: unknown) {
+          if ((error as { code?: string }).code === "auth/user-not-found") {
+            userRecord = await auth.createUser({
+              email: newEmail,
+              emailVerified: false,
+              disabled: false,
+            });
+          } else {
+            throw error;
+          }
+        }
+
+        // Create user document
+        await db.collection("users").doc(userRecord.uid).set({
+          email: newEmail,
+          employeeId: parseInt(employeeId) || employeeId,
+          role: "employee",
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+
+        // Update employee with uid
+        await event.data?.after.ref.update({
+          uid: userRecord.uid,
+          accountCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        // Send password reset
+        await auth.generatePasswordResetLink(newEmail);
+        logger.log(`Account created and reset email sent to ${newEmail}`);
+      }
+    } catch (error) {
+      logger.error(`Error handling email update for employee ${employeeId}:`, error);
+      throw error;
+    }
+  }
+);
+
+/**
+ * Creates a manager account. Called manually or via admin setup.
+ * This is a helper function - you'll call it once to set up your manager account.
+ */
+export const createManagerAccount = onDocumentCreated(
+  "managers/{managerId}",
+  async (event) => {
+    const snapshot = event.data;
+    if (!snapshot) return;
+
+    const managerData = snapshot.data();
+    const email = managerData.email;
+
+    if (!email) {
+      logger.log("Manager document has no email");
+      return;
+    }
+
+    try {
+      // Check if user exists
+      let userRecord;
+      try {
+        userRecord = await auth.getUserByEmail(email);
+      } catch (error: unknown) {
+        if ((error as { code?: string }).code === "auth/user-not-found") {
+          userRecord = await auth.createUser({
+            email: email,
+            emailVerified: false,
+            disabled: false,
+          });
+        } else {
+          throw error;
+        }
+      }
+
+      // Create user document with manager role
+      await db.collection("users").doc(userRecord.uid).set({
+        email: email,
+        role: "manager",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+
+      // Update manager document with uid
+      await snapshot.ref.update({
+        uid: userRecord.uid,
+      });
+
+      // Send password reset
+      await auth.generatePasswordResetLink(email);
+      logger.log(`Manager account created for ${email}`);
+    } catch (error) {
+      logger.error("Error creating manager account:", error);
+      throw error;
+    }
+  }
+);
+
+// ============== NOTIFICATION FUNCTIONS ==============
+// These are the framework for sending notifications.
+// The actual triggers are NOT implemented - you'll add them later.
+
+const messaging = admin.messaging();
+
+/**
+ * Send a notification to a specific employee.
+ * Called from the manager app when needed.
+ * 
+ * @param employeeUid - The uid of the employee to notify
+ * @param title - Notification title
+ * @param body - Notification body
+ * @param data - Additional data payload
+ */
+export const sendNotificationToEmployee = onCall(async (request) => {
+  // Verify caller is a manager
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Must be logged in");
+  }
+
+  const callerDoc = await db.collection("users").doc(request.auth.uid).get();
+  if (!callerDoc.exists || callerDoc.data()?.role !== "manager") {
+    throw new HttpsError("permission-denied", "Only managers can send notifications");
+  }
+
+  const { employeeUid, title, body, data } = request.data;
+
+  if (!employeeUid || !title) {
+    throw new HttpsError("invalid-argument", "employeeUid and title are required");
+  }
+
+  try {
+    // Get employee's FCM token
+    const employeeQuery = await db.collection("employees")
+      .where("uid", "==", employeeUid)
+      .limit(1)
+      .get();
+
+    if (employeeQuery.empty) {
+      throw new HttpsError("not-found", "Employee not found");
+    }
+
+    const employeeData = employeeQuery.docs[0].data();
+    const fcmToken = employeeData.fcmToken;
+
+    if (!fcmToken) {
+      logger.log(`Employee ${employeeUid} has no FCM token`);
+      return { success: false, reason: "no_token" };
+    }
+
+    // Send notification
+    const message: admin.messaging.Message = {
+      token: fcmToken,
+      notification: {
+        title: title,
+        body: body || "",
+      },
+      data: {
+        ...data,
+        click_action: "FLUTTER_NOTIFICATION_CLICK",
+      },
+      android: {
+        priority: "high",
+        notification: {
+          channelId: "schedule_notifications",
+          priority: "high",
+        },
+      },
+    };
+
+    const response = await messaging.send(message);
+    logger.log(`Notification sent to ${employeeUid}: ${response}`);
+
+    return { success: true, messageId: response };
+  } catch (error) {
+    logger.error(`Error sending notification to ${employeeUid}:`, error);
+    throw new HttpsError("internal", "Failed to send notification");
+  }
+});
+
+/**
+ * Send a notification to multiple employees.
+ * Useful for schedule publish notifications.
+ * 
+ * @param employeeUids - Array of employee uids to notify
+ * @param title - Notification title
+ * @param body - Notification body
+ * @param data - Additional data payload
+ */
+export const sendNotificationToMultiple = onCall(async (request) => {
+  // Verify caller is a manager
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Must be logged in");
+  }
+
+  const callerDoc = await db.collection("users").doc(request.auth.uid).get();
+  if (!callerDoc.exists || callerDoc.data()?.role !== "manager") {
+    throw new HttpsError("permission-denied", "Only managers can send notifications");
+  }
+
+  const { employeeUids, title, body, data } = request.data;
+
+  if (!employeeUids || !Array.isArray(employeeUids) || !title) {
+    throw new HttpsError("invalid-argument", "employeeUids array and title are required");
+  }
+
+  try {
+    // Get FCM tokens for all employees
+    const tokens: string[] = [];
+    
+    for (const uid of employeeUids) {
+      const employeeQuery = await db.collection("employees")
+        .where("uid", "==", uid)
+        .limit(1)
+        .get();
+
+      if (!employeeQuery.empty) {
+        const fcmToken = employeeQuery.docs[0].data().fcmToken;
+        if (fcmToken) {
+          tokens.push(fcmToken);
+        }
+      }
+    }
+
+    if (tokens.length === 0) {
+      logger.log("No valid FCM tokens found");
+      return { success: false, reason: "no_tokens", sent: 0 };
+    }
+
+    // Send to all tokens
+    const message: admin.messaging.MulticastMessage = {
+      tokens: tokens,
+      notification: {
+        title: title,
+        body: body || "",
+      },
+      data: {
+        ...data,
+        click_action: "FLUTTER_NOTIFICATION_CLICK",
+      },
+      android: {
+        priority: "high",
+        notification: {
+          channelId: "schedule_notifications",
+          priority: "high",
+        },
+      },
+    };
+
+    const response = await messaging.sendEachForMulticast(message);
+    logger.log(`Sent ${response.successCount}/${tokens.length} notifications`);
+
+    return { 
+      success: true, 
+      sent: response.successCount,
+      failed: response.failureCount,
+    };
+  } catch (error) {
+    logger.error("Error sending notifications:", error);
+    throw new HttpsError("internal", "Failed to send notifications");
+  }
+});
+
+/**
+ * Send a notification to a topic (all subscribers).
+ * Useful for announcements.
+ * 
+ * @param topic - The topic name (e.g., "announcements")
+ * @param title - Notification title
+ * @param body - Notification body
+ * @param data - Additional data payload
+ */
+export const sendNotificationToTopic = onCall(async (request) => {
+  // Verify caller is a manager
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Must be logged in");
+  }
+
+  const callerDoc = await db.collection("users").doc(request.auth.uid).get();
+  if (!callerDoc.exists || callerDoc.data()?.role !== "manager") {
+    throw new HttpsError("permission-denied", "Only managers can send notifications");
+  }
+
+  const { topic, title, body, data } = request.data;
+
+  if (!topic || !title) {
+    throw new HttpsError("invalid-argument", "topic and title are required");
+  }
+
+  try {
+    const message: admin.messaging.Message = {
+      topic: topic,
+      notification: {
+        title: title,
+        body: body || "",
+      },
+      data: {
+        ...data,
+        click_action: "FLUTTER_NOTIFICATION_CLICK",
+      },
+      android: {
+        priority: "high",
+        notification: {
+          channelId: "schedule_notifications",
+          priority: "high",
+        },
+      },
+    };
+
+    const response = await messaging.send(message);
+    logger.log(`Topic notification sent to ${topic}: ${response}`);
+
+    return { success: true, messageId: response };
+  } catch (error) {
+    logger.error(`Error sending topic notification:`, error);
+    throw new HttpsError("internal", "Failed to send notification");
+  }
+});
+
+// ============== NOTIFICATION TRIGGER STUBS ==============
+// These are commented out - uncomment and customize when ready to enable
+
+/*
+// Trigger notification when time-off is approved
+export const onTimeOffApproved = onDocumentUpdated(
+  "timeOffRequests/{requestId}",
+  async (event) => {
+    const before = event.data?.before.data();
+    const after = event.data?.after.data();
+    
+    if (!before || !after) return;
+    
+    // Only trigger if status changed to approved
+    if (before.status !== "approved" && after.status === "approved") {
+      const employeeUid = after.employeeUid;
+      // Call sendNotificationToEmployee here
+    }
+  }
+);
+
+// Trigger notification when schedule is published
+export const onSchedulePublished = onDocumentCreated(
+  "publishedSchedules/{scheduleId}",
+  async (event) => {
+    const data = event.data?.data();
+    if (!data) return;
+    
+    // Get list of employees in this schedule
+    // Call sendNotificationToMultiple here
+  }
+);
+*/
