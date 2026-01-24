@@ -1032,12 +1032,25 @@ class FirestoreSyncService {
 
       // Download time-off
       final timeOffSnapshot = await timeOffRef.get();
+      int importedCount = 0;
       for (final doc in timeOffSnapshot.docs) {
         final data = doc.data();
-        if (data['localId'] == null) continue; // Skip entries without local ID
+        final employeeLocalId = data['employeeLocalId'] as int?;
+        if (employeeLocalId == null) continue; // Must have employee ID
+        
+        // Use localId if available, otherwise generate one from Firestore doc ID hash
+        int localId;
+        if (data['localId'] != null) {
+          localId = data['localId'] as int;
+        } else {
+          // Generate a unique ID from the Firestore document ID
+          // Use a high number range to avoid conflicts with existing local IDs
+          localId = doc.id.hashCode.abs() % 900000 + 100000;
+        }
+        
         await db.insert('time_off', {
-          'id': data['localId'],
-          'employeeId': data['employeeLocalId'],
+          'id': localId,
+          'employeeId': employeeLocalId,
           'date': data['date'],
           'timeOffType': data['timeOffType'],
           'hours': data['hours'],
@@ -1046,9 +1059,10 @@ class FirestoreSyncService {
           'startTime': data['startTime'],
           'endTime': data['endTime'],
         }, conflictAlgorithm: ConflictAlgorithm.replace);
+        importedCount++;
       }
       log(
-        'Downloaded ${timeOffSnapshot.docs.length} time-off entries',
+        'Downloaded $importedCount time-off entries',
         name: 'FirestoreSyncService',
       );
 
@@ -1160,6 +1174,10 @@ class FirestoreSyncService {
           name: 'FirestoreSyncService',
         );
       }
+
+      // Import any approved time-off requests from root collection
+      await importApprovedTimeOffRequests();
+      
     } catch (e) {
       log(
         'Error downloading data from cloud: $e',
