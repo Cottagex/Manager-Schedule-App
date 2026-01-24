@@ -374,8 +374,7 @@ class SchedulePdfService {
             pw.SizedBox(height: 6),
             pw.Expanded(
               child: pw.FittedBox(
-                fit: pw.BoxFit.contain,
-                alignment: pw.Alignment.topCenter,
+                fit: pw.BoxFit.fill,
                 child: _buildManagerTable(
                   employees: sortedEmployees,
                   days: days,
@@ -479,8 +478,7 @@ class SchedulePdfService {
             pw.SizedBox(height: 6),
             pw.Expanded(
               child: pw.FittedBox(
-                fit: pw.BoxFit.contain,
-                alignment: pw.Alignment.topCenter,
+                fit: pw.BoxFit.fill,
                 child: _buildManagerTable(
                   employees: sortedEmployees,
                   days: days,
