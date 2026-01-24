@@ -202,16 +202,21 @@ class FirestoreSyncService {
     try {
       final docRef = employeesRef.doc(employee.id.toString());
 
-      await docRef.set({
+      final data = <String, dynamic>{
         'localId': employee.id,
         'name': employee.name,
         'jobCode': employee.jobCode,
         'email': employee.email,
-        'uid': employee.uid,
         'vacationWeeksAllowed': employee.vacationWeeksAllowed,
         'vacationWeeksUsed': employee.vacationWeeksUsed,
         'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      };
+      // Only set uid if we have one locally - don't overwrite server-created UIDs
+      if (employee.uid != null) {
+        data['uid'] = employee.uid;
+      }
+
+      await docRef.set(data, SetOptions(merge: true));
 
       log(
         'Synced employee ${employee.name} to Firestore',
@@ -245,16 +250,20 @@ class FirestoreSyncService {
         if (employee.id == null) continue;
 
         final docRef = employeesRef.doc(employee.id.toString());
-        batch.set(docRef, {
+        final data = <String, dynamic>{
           'localId': employee.id,
           'name': employee.name,
           'jobCode': employee.jobCode,
           'email': employee.email,
-          'uid': employee.uid,
           'vacationWeeksAllowed': employee.vacationWeeksAllowed,
           'vacationWeeksUsed': employee.vacationWeeksUsed,
           'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
+        };
+        // Only set uid if we have one locally - don't overwrite server-created UIDs
+        if (employee.uid != null) {
+          data['uid'] = employee.uid;
+        }
+        batch.set(docRef, data, SetOptions(merge: true));
       }
 
       await batch.commit();
@@ -262,9 +271,48 @@ class FirestoreSyncService {
         'Synced ${employees.length} employees to Firestore',
         name: 'FirestoreSyncService',
       );
+
+      // Trigger UID creation for employees without UIDs
+      await triggerUidCreationForEmployees();
     } catch (e) {
       log('Error syncing all employees: $e', name: 'FirestoreSyncService');
       rethrow;
+    }
+  }
+
+  /// Trigger Firebase function to create UIDs for employees without them.
+  /// The onDocumentUpdated function will create accounts when it sees no UID.
+  Future<void> triggerUidCreationForEmployees() async {
+    final employeesRef = _employeesRef;
+    if (employeesRef == null) return;
+
+    try {
+      // Find employees without UIDs
+      final snapshot = await employeesRef.where('uid', isNull: true).get();
+      
+      if (snapshot.docs.isEmpty) {
+        log('All employees have UIDs', name: 'FirestoreSyncService');
+        return;
+      }
+
+      log(
+        'Found ${snapshot.docs.length} employees without UIDs, triggering creation...',
+        name: 'FirestoreSyncService',
+      );
+
+      // Touch each document to trigger the onDocumentUpdated function
+      for (final doc in snapshot.docs) {
+        await doc.reference.update({
+          'uidRequested': FieldValue.serverTimestamp(),
+        });
+      }
+
+      log(
+        'Triggered UID creation for ${snapshot.docs.length} employees',
+        name: 'FirestoreSyncService',
+      );
+    } catch (e) {
+      log('Error triggering UID creation: $e', name: 'FirestoreSyncService');
     }
   }
 
