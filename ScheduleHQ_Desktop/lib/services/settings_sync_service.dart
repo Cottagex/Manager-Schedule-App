@@ -301,7 +301,6 @@ class SettingsSyncService {
   Map<String, dynamic> _settingsToMap(Settings settings) {
     return {
       'ptoHoursPerTrimester': settings.ptoHoursPerTrimester,
-      'ptoHoursPerRequest': settings.ptoHoursPerRequest,
       'maxCarryoverHours': settings.maxCarryoverHours,
       'assistantVacationDays': settings.assistantVacationDays,
       'swingVacationDays': settings.swingVacationDays,
@@ -316,7 +315,6 @@ class SettingsSyncService {
     return Settings(
       id: 1,
       ptoHoursPerTrimester: map['ptoHoursPerTrimester'] as int? ?? 30,
-      ptoHoursPerRequest: map['ptoHoursPerRequest'] as int? ?? 8,
       maxCarryoverHours: map['maxCarryoverHours'] as int? ?? 10,
       assistantVacationDays: map['assistantVacationDays'] as int? ?? 6,
       swingVacationDays: map['swingVacationDays'] as int? ?? 7,

@@ -407,6 +407,177 @@ export const createManagerAccount = onDocumentCreated(
   }
 );
 
+/**
+ * Creates a new manager account with server-side auth code validation.
+ * The auth code is stored in Firestore at settings/managerAuthCode.
+ * 
+ * @param email - Manager's email address
+ * @param password - Manager's password
+ * @param displayName - Manager's display name
+ * @param authCode - Authorization code to validate
+ */
+export const createManagerAccountWithAuthCode = onCall(
+  { invoker: "public" },  // Allow unauthenticated access - we validate via auth code
+  async (request) => {
+  const { email, password, displayName, authCode } = request.data;
+
+  // Validate required fields
+  if (!email || !password || !authCode) {
+    throw new HttpsError("invalid-argument", "Email, password, and authorization code are required");
+  }
+
+  // Validate email format
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    throw new HttpsError("invalid-argument", "Invalid email format");
+  }
+
+  // Validate password length
+  if (password.length < 6) {
+    throw new HttpsError("invalid-argument", "Password must be at least 6 characters");
+  }
+
+  try {
+    // Get the stored auth code from Firestore
+    const authCodeDoc = await db.collection("settings").doc("managerAuthCode").get();
+    
+    if (!authCodeDoc.exists) {
+      logger.error("Manager auth code not configured in Firestore");
+      throw new HttpsError("failed-precondition", "Authorization system not configured. Contact administrator.");
+    }
+
+    const storedAuthCode = authCodeDoc.data()?.code;
+    if (!storedAuthCode) {
+      logger.error("Manager auth code document exists but has no code field");
+      throw new HttpsError("failed-precondition", "Authorization system not configured. Contact administrator.");
+    }
+
+    // Validate the auth code (case-insensitive comparison)
+    if (authCode.trim().toLowerCase() !== storedAuthCode.trim().toLowerCase()) {
+      logger.warn(`Invalid auth code attempt for email: ${email}`);
+      throw new HttpsError("permission-denied", "Invalid authorization code");
+    }
+
+    // Check if user already exists
+    try {
+      await auth.getUserByEmail(email);
+      throw new HttpsError("already-exists", "An account with this email already exists");
+    } catch (error: unknown) {
+      if ((error as { code?: string }).code !== "auth/user-not-found") {
+        throw error;
+      }
+      // User doesn't exist, which is what we want
+    }
+
+    // Create the Firebase Auth user
+    const userRecord = await auth.createUser({
+      email: email,
+      password: password,
+      displayName: displayName || undefined,
+      emailVerified: false,
+    });
+
+    // Create user document with manager role
+    await db.collection("users").doc(userRecord.uid).set({
+      email: email,
+      displayName: displayName || null,
+      role: "manager",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    logger.log(`Manager account created via auth code for ${email} (uid: ${userRecord.uid})`);
+
+    return { 
+      success: true, 
+      uid: userRecord.uid,
+      message: "Manager account created successfully" 
+    };
+
+  } catch (error) {
+    if (error instanceof HttpsError) {
+      throw error;
+    }
+    logger.error("Error creating manager account:", error);
+    throw new HttpsError("internal", "Failed to create account. Please try again.");
+  }
+});
+
+/**
+ * Updates the manager authorization code. Only callable by existing managers.
+ * 
+ * @param newCode - The new authorization code
+ */
+export const updateManagerAuthCode = onCall(
+  { invoker: "public" },  // Public access but we verify auth internally
+  async (request) => {
+  // Verify caller is authenticated
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Must be logged in");
+  }
+
+  // Verify caller is a manager
+  const callerDoc = await db.collection("users").doc(request.auth.uid).get();
+  if (!callerDoc.exists || callerDoc.data()?.role !== "manager") {
+    throw new HttpsError("permission-denied", "Only managers can update the authorization code");
+  }
+
+  const { newCode } = request.data;
+
+  if (!newCode || typeof newCode !== "string" || newCode.trim().length === 0) {
+    throw new HttpsError("invalid-argument", "New authorization code is required");
+  }
+
+  try {
+    await db.collection("settings").doc("managerAuthCode").set({
+      code: newCode.trim(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedBy: request.auth.uid,
+    });
+
+    logger.log(`Manager auth code updated by ${request.auth.uid}`);
+    return { success: true, message: "Authorization code updated successfully" };
+
+  } catch (error) {
+    logger.error("Error updating auth code:", error);
+    throw new HttpsError("internal", "Failed to update authorization code");
+  }
+});
+
+/**
+ * Gets the current manager authorization code. Only callable by existing managers.
+ */
+export const getManagerAuthCode = onCall(
+  { invoker: "public" },  // Public access but we verify auth internally
+  async (request) => {
+  // Verify caller is authenticated
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Must be logged in");
+  }
+
+  // Verify caller is a manager
+  const callerDoc = await db.collection("users").doc(request.auth.uid).get();
+  if (!callerDoc.exists || callerDoc.data()?.role !== "manager") {
+    throw new HttpsError("permission-denied", "Only managers can view the authorization code");
+  }
+
+  try {
+    const authCodeDoc = await db.collection("settings").doc("managerAuthCode").get();
+    
+    if (!authCodeDoc.exists) {
+      return { code: null, message: "No authorization code configured" };
+    }
+
+    return { 
+      code: authCodeDoc.data()?.code || null,
+      updatedAt: authCodeDoc.data()?.updatedAt || null,
+    };
+
+  } catch (error) {
+    logger.error("Error getting auth code:", error);
+    throw new HttpsError("internal", "Failed to retrieve authorization code");
+  }
+});
+
 // ============== NOTIFICATION FUNCTIONS ==============
 // These are the framework for sending notifications.
 // The actual triggers are NOT implemented - you'll add them later.

@@ -4,7 +4,6 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:schedulehq_desktop/database/app_database.dart';
 import 'package:schedulehq_desktop/database/time_off_dao.dart';
 import 'package:schedulehq_desktop/database/employee_dao.dart';
-import 'package:schedulehq_desktop/database/settings_dao.dart';
 import 'package:schedulehq_desktop/services/pto_trimester_service.dart';
 import 'package:schedulehq_desktop/models/employee.dart';
 import 'package:schedulehq_desktop/models/time_off_entry.dart';
@@ -24,13 +23,11 @@ void main() {
   test('pto added as full day is counted in trimester summary', () async {
     final employeeDao = EmployeeDao();
     final timeOffDao = TimeOffDao();
-    final settingsDao = SettingsDao();
     final ptoService = PtoTrimesterService(timeOffDao: timeOffDao);
 
     final id = await employeeDao.insertEmployee(Employee(name: 'PTO Tester', jobCode: 'assistant'));
 
-    final settings = await settingsDao.getSettings();
-    final ptoHours = settings.ptoHoursPerRequest;
+    const ptoHours = 9; // Hardcoded default hours per PTO request
 
     final now = DateTime.now();
     final ptoDate = DateTime(now.year, 3, 3);
@@ -45,18 +42,16 @@ void main() {
   test('multi-day PTO blocked if not enough remaining in trimester', () async {
     final employeeDao = EmployeeDao();
     final timeOffDao = TimeOffDao();
-    final settingsDao = SettingsDao();
     final ptoService = PtoTrimesterService(timeOffDao: timeOffDao);
 
     final id = await employeeDao.insertEmployee(Employee(name: 'PTO Insufficient', jobCode: 'assistant'));
 
-    final settings = await settingsDao.getSettings();
-    final hoursPerDay = settings.ptoHoursPerRequest;
+    const hoursPerDay = 9; // Hardcoded default hours per PTO request
 
     final now = DateTime.now();
     final startDate = DateTime(now.year, 3, 1);
 
-    final days = 4; // 4 * 8 = 32 > default 30 earned
+    final days = 4; // 4 * 9 = 36 > default 30 earned
     final requestedHours = days * hoursPerDay;
 
     final remaining = await ptoService.getRemainingForDate(id, startDate);
@@ -67,18 +62,16 @@ void main() {
   test('multi-day PTO allowed when enough remaining and consumed by inserts', () async {
     final employeeDao = EmployeeDao();
     final timeOffDao = TimeOffDao();
-    final settingsDao = SettingsDao();
     final ptoService = PtoTrimesterService(timeOffDao: timeOffDao);
 
     final id = await employeeDao.insertEmployee(Employee(name: 'PTO Allowed', jobCode: 'assistant'));
 
-    final settings = await settingsDao.getSettings();
-    final hoursPerDay = settings.ptoHoursPerRequest;
+    const hoursPerDay = 9; // Hardcoded default hours per PTO request
 
     final now = DateTime.now();
     final startDate = DateTime(now.year, 3, 1);
 
-    final days = 3; // 3 * 8 = 24 <= default 30
+    final days = 3; // 3 * 9 = 27 <= default 30
     final requestedHours = days * hoursPerDay;
 
     final remaining = await ptoService.getRemainingForDate(id, startDate);

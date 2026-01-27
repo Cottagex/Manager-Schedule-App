@@ -1,7 +1,6 @@
 class Settings {
   final int id;
   final int ptoHoursPerTrimester;
-  final int ptoHoursPerRequest;
   final int maxCarryoverHours;
   final int assistantVacationDays;
   final int swingVacationDays;
@@ -14,7 +13,6 @@ class Settings {
   const Settings({
     required this.id,
     required this.ptoHoursPerTrimester,
-    required this.ptoHoursPerRequest,
     required this.maxCarryoverHours,
     required this.assistantVacationDays,
     required this.swingVacationDays,
@@ -32,7 +30,6 @@ class Settings {
     return Settings(
       id: map['id'] as int,
       ptoHoursPerTrimester: map['ptoHoursPerTrimester'] as int,
-      ptoHoursPerRequest: map['ptoHoursPerRequest'] as int,
       maxCarryoverHours: map['maxCarryoverHours'] as int,
       assistantVacationDays: map['assistantVacationDays'] as int,
       swingVacationDays: map['swingVacationDays'] as int,
@@ -51,7 +48,6 @@ class Settings {
     return {
       'id': id,
       'ptoHoursPerTrimester': ptoHoursPerTrimester,
-      'ptoHoursPerRequest': ptoHoursPerRequest,
       'maxCarryoverHours': maxCarryoverHours,
       'assistantVacationDays': assistantVacationDays,
       'swingVacationDays': swingVacationDays,
@@ -69,7 +65,6 @@ class Settings {
   Settings copyWith({
     int? id,
     int? ptoHoursPerTrimester,
-    int? ptoHoursPerRequest,
     int? maxCarryoverHours,
     int? assistantVacationDays,
     int? swingVacationDays,
@@ -83,7 +78,6 @@ class Settings {
       id: id ?? this.id,
       ptoHoursPerTrimester:
           ptoHoursPerTrimester ?? this.ptoHoursPerTrimester,
-      ptoHoursPerRequest: ptoHoursPerRequest ?? this.ptoHoursPerRequest,
       maxCarryoverHours: maxCarryoverHours ?? this.maxCarryoverHours,
       assistantVacationDays:
           assistantVacationDays ?? this.assistantVacationDays,
@@ -103,7 +97,6 @@ class Settings {
 Settings(
   id: $id,
   ptoHoursPerTrimester: $ptoHoursPerTrimester,
-  ptoHoursPerRequest: $ptoHoursPerRequest,
   maxCarryoverHours: $maxCarryoverHours,
   assistantVacationDays: $assistantVacationDays,
   swingVacationDays: $swingVacationDays,

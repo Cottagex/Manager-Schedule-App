@@ -18,7 +18,7 @@ class StoreUpdateService {
       'JasonSjogren.ScheduleHQ_<hash>'; // TODO: Replace with actual PFN
 
   // Current app version (should match pubspec.yaml)
-  static const String currentVersion = '2.5.1';
+  static const String currentVersion = '2.6.2';
 
   /// Cached update info
   static bool _updateAvailable = false;
@@ -66,6 +66,10 @@ class StoreUpdateService {
 
   /// Check for updates from the Microsoft Store
   /// Returns true if an update is available
+  /// 
+  /// Note: Reliably detecting Store updates programmatically is complex.
+  /// This method checks if the app is running as an MSIX package from the Store.
+  /// For actual update detection, users should check the Microsoft Store directly.
   static Future<bool> checkForUpdates() async {
     _lastError = null;
     _updateAvailable = false;
@@ -76,62 +80,49 @@ class StoreUpdateService {
     }
 
     try {
-      // Use PowerShell to check for updates via Windows Store APIs
-      // This queries the store for the current package
+      // Check if this app is installed as an MSIX/Store package
+      // by checking for package identity
       final result = await Process.run('powershell', [
         '-NoProfile',
         '-Command',
         '''
         try {
-          Add-Type -AssemblyName System.Runtime.WindowsRuntime
-          
-          # Get the StoreContext
-          \$asyncOp = [Windows.Services.Store.StoreContext,Windows.Services.Store,ContentType=WindowsRuntime]::GetDefault().GetStoreProductForCurrentAppAsync()
-          
-          # Wait for the async operation
-          \$null = [System.WindowsRuntimeSystemExtensions]::AsTask(\$asyncOp).GetAwaiter().GetResult()
-          
-          \$product = \$asyncOp.GetResults()
-          
-          if (\$product.ExtendedError -eq \$null -and \$product.Product -ne \$null) {
-            # Check if updates are available
-            \$updateOp = [Windows.Services.Store.StoreContext,Windows.Services.Store,ContentType=WindowsRuntime]::GetDefault().GetAppAndOptionalStorePackageUpdatesAsync()
-            \$null = [System.WindowsRuntimeSystemExtensions]::AsTask(\$updateOp).GetAwaiter().GetResult()
-            \$updates = \$updateOp.GetResults()
-            
-            if (\$updates.Count -gt 0) {
+          \$package = Get-AppxPackage | Where-Object { \$_.Name -like "*ScheduleHQ*" } | Select-Object -First 1
+          if (\$package) {
+            # App is installed as MSIX - check Store for updates using winget
+            \$wingetResult = winget upgrade --id "9NL0BML96F0F" --accept-source-agreements 2>&1
+            if (\$wingetResult -match "available|upgrade") {
               Write-Output "UPDATE_AVAILABLE"
             } else {
               Write-Output "UP_TO_DATE"
             }
           } else {
-            # App not from store, use alternative method
             Write-Output "NOT_STORE_APP"
           }
         } catch {
-          Write-Output "ERROR:\$(\$_.Exception.Message)"
+          # If winget fails, just report up to date (user can check Store manually)
+          Write-Output "UP_TO_DATE"
         }
         '''
-      ]).timeout(const Duration(seconds: 15));
+      ]).timeout(const Duration(seconds: 20));
 
       final output = result.stdout.toString().trim();
       debugPrint('StoreUpdateService: Check result: $output');
 
-      if (output == 'UPDATE_AVAILABLE') {
+      if (output.contains('UPDATE_AVAILABLE')) {
         _updateAvailable = true;
         return true;
-      } else if (output == 'UP_TO_DATE') {
+      } else if (output.contains('UP_TO_DATE')) {
         _updateAvailable = false;
         return false;
-      } else if (output == 'NOT_STORE_APP') {
+      } else if (output.contains('NOT_STORE_APP')) {
         _lastError = 'App not installed from Microsoft Store';
         return false;
-      } else if (output.startsWith('ERROR:')) {
-        _lastError = output.substring(6);
+      } else {
+        // Unknown response - assume up to date
+        debugPrint('StoreUpdateService: Unknown response: $output');
         return false;
       }
-
-      return false;
     } catch (e) {
       debugPrint('StoreUpdateService: Error checking for updates: $e');
       _lastError = e.toString();

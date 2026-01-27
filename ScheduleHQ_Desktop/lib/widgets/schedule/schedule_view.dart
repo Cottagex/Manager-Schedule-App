@@ -5186,6 +5186,19 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
         return runner?.runnerName;
       }
 
+      // Count unique employees working on a given day (excluding time-off labels)
+      int getEmployeeCountForDay(DateTime day) {
+        final employeeIds = widget.shifts
+            .where((s) =>
+                s.start.year == day.year &&
+                s.start.month == day.month &&
+                s.start.day == day.day &&
+                !['VAC', 'PTO', 'REQ OFF', 'OFF'].contains(s.text.toUpperCase()))
+            .map((s) => s.employeeId)
+            .toSet();
+        return employeeIds.length;
+      }
+
       Widget buildHeaderCell(String text) {
         return Container(
           padding: const EdgeInsets.all(4),
@@ -5199,23 +5212,25 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
       }
 
       Widget buildShiftHeader(String shiftType) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
         return Container(
           padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
           alignment: Alignment.center,
-          color: getShiftColor(shiftType).withOpacity(0.2),
+          color: getShiftColor(shiftType).withOpacity(0.3),
           child: Text(
             ShiftRunner.getLabelForType(shiftType),
             textAlign: TextAlign.center,
             style: TextStyle(
               fontWeight: FontWeight.w600,
               fontSize: 11,
-              color: getShiftColor(shiftType),
+              color: isDark ? Colors.white : Colors.black,
             ),
           ),
         );
       }
 
       Widget buildDayCell(DateTime day) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
         return Container(
           padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
           alignment: Alignment.center,
@@ -5227,16 +5242,18 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
             children: [
               Text(
                 dayAbbr(day.weekday),
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 9,
+                  color: isDark ? Colors.white : Colors.black,
                 ),
               ),
               Text(
                 '${day.month}/${day.day}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w500,
                   fontSize: 9,
+                  color: isDark ? Colors.white : Colors.black,
                 ),
               ),
             ],
@@ -5298,7 +5315,7 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
               constraints: const BoxConstraints(minHeight: 28),
               decoration: BoxDecoration(
                 color: hasRunner
-                    ? getShiftColor(shiftType).withOpacity(0.1)
+                    ? getShiftColor(shiftType).withOpacity(0.15)
                     : null,
               ),
               child: Text(
@@ -5307,7 +5324,7 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
                 style: TextStyle(
                   fontSize: 10,
                   color: hasRunner
-                      ? context.appColors.textPrimary
+                      ? (isDark ? Colors.white : Colors.black)
                       : context.appColors.textTertiary,
                 ),
                 maxLines: 1,
@@ -5320,6 +5337,26 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
 
       // Build table rows for a single week with thick border
       Widget buildWeekTable(List<DateTime> weekDays, bool isFirst) {
+        // Helper to build the Mgr # cell
+        Widget buildMgrCountCell(DateTime day) {
+          final isDark = Theme.of(context).brightness == Brightness.dark;
+          final count = getEmployeeCountForDay(day);
+          return Container(
+            padding: const EdgeInsets.all(2),
+            alignment: Alignment.center,
+            constraints: const BoxConstraints(minHeight: 28),
+            child: Text(
+              count.toString(),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: isDark ? Colors.white : Colors.black,
+              ),
+            ),
+          );
+        }
+
         return Container(
           decoration: BoxDecoration(
             border: Border.all(
@@ -5330,16 +5367,18 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
           margin: EdgeInsets.only(top: isFirst ? 0 : 4),
           child: Table(
             defaultColumnWidth: const FixedColumnWidth(55),
-            columnWidths: const {
-              0: FixedColumnWidth(
+            columnWidths: {
+              0: const FixedColumnWidth(
                 45,
               ), // Day column (narrower now with stacked layout)
+              1: const FixedColumnWidth(40), // Mgr # column
             },
             border: TableBorder.all(color: Colors.grey.shade300, width: 1),
             children: weekDays.map((day) {
               return TableRow(
                 children: [
                   buildDayCell(day),
+                  buildMgrCountCell(day),
                   ...shiftTypeKeys.map((shiftType) {
                     final runner = getRunnerForCell(day, shiftType);
                     return buildRunnerCell(day, shiftType, runner);
@@ -5352,7 +5391,7 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
       }
 
       return Container(
-        width: _isRunnerPanelExpanded ? 320 : 40,
+        width: _isRunnerPanelExpanded ? 360 : 40,
         decoration: BoxDecoration(
           border: Border(
             left: BorderSide(color: Theme.of(context).dividerColor),
@@ -5422,6 +5461,10 @@ class _MonthlyScheduleViewState extends State<MonthlyScheduleView> {
                         width: 45,
                         child: buildHeaderCell(''),
                       ), // Match day column width
+                      SizedBox(
+                        width: 40,
+                        child: buildHeaderCell('Mgr #'),
+                      ), // Mgr # column header
                       ...shiftTypeKeys.map(
                         (shiftType) => SizedBox(
                           width: 55, // Match table column width

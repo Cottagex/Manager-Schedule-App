@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:developer';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:http/http.dart' as http;
 
 /// Service for managing Firebase authentication
 class AuthService {
@@ -11,6 +13,13 @@ class AuthService {
 
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  
+  // Cloud Run URLs for Firebase v2 callable functions
+  // Format: https://[function-name]-[project-hash].[region].run.app
+  static const String _createAccountUrl = 
+      'https://createmanageraccountwithauthcode-to5pidma6a-uc.a.run.app';
+  static const String _getAuthCodeUrl = 
+      'https://getmanagerauthcode-to5pidma6a-uc.a.run.app';
 
   /// Current logged in user
   User? get currentUser => _auth.currentUser;
@@ -74,37 +83,115 @@ class AuthService {
     }
   }
 
-  /// Create a new manager account
+  /// Create a new manager account via Cloud Function with auth code validation
   Future<UserCredential> createManagerAccount({
     required String email,
     required String password,
+    required String authCode,
     String? displayName,
   }) async {
     try {
-      final credential = await _auth.createUserWithEmailAndPassword(
+      // Call Cloud Function via HTTP (works on all platforms including Windows)
+      final response = await http.post(
+        Uri.parse(_createAccountUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'data': {
+            'email': email,
+            'password': password,
+            'displayName': displayName,
+            'authCode': authCode,
+          }
+        }),
+      );
+
+      final responseData = jsonDecode(response.body);
+      
+      if (response.statusCode != 200) {
+        final error = responseData['error'] ?? {};
+        final errorCode = error['status'] ?? 'unknown';
+        final errorMessage = error['message'] ?? 'Failed to create account';
+        
+        log('Create account error: $errorCode - $errorMessage', name: 'AuthService');
+        
+        // Convert error codes to user-friendly messages
+        if (errorCode == 'PERMISSION_DENIED' || errorMessage.contains('Invalid authorization')) {
+          throw FirebaseAuthException(
+            code: 'invalid-auth-code',
+            message: 'Invalid authorization code',
+          );
+        } else if (errorCode == 'ALREADY_EXISTS' || errorMessage.contains('already exists')) {
+          throw FirebaseAuthException(
+            code: 'email-already-in-use',
+            message: 'An account with this email already exists',
+          );
+        } else if (errorCode == 'FAILED_PRECONDITION') {
+          throw FirebaseAuthException(
+            code: 'not-configured',
+            message: errorMessage,
+          );
+        } else {
+          throw FirebaseAuthException(
+            code: errorCode,
+            message: errorMessage,
+          );
+        }
+      }
+
+      final result = responseData['result'] ?? responseData;
+      if (result['success'] != true) {
+        throw FirebaseAuthException(
+          code: 'creation-failed',
+          message: result['message'] ?? 'Failed to create account',
+        );
+      }
+
+      // Sign in with the newly created account
+      final credential = await _auth.signInWithEmailAndPassword(
         email: email,
         password: password,
       );
-
-      // Create user document with manager role
-      if (credential.user != null) {
-        await _firestore.collection('users').doc(credential.user!.uid).set({
-          'email': email,
-          'displayName': displayName,
-          'role': 'manager',
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-
-        // Update display name if provided
-        if (displayName != null && displayName.isNotEmpty) {
-          await credential.user!.updateDisplayName(displayName);
-        }
-      }
 
       log('Manager account created: $email', name: 'AuthService');
       return credential;
     } catch (e) {
       log('Create account error: $e', name: 'AuthService');
+      rethrow;
+    }
+  }
+
+  /// Get the current manager authorization code (managers only)
+  Future<String?> getManagerAuthCode() async {
+    try {
+      final idToken = await _auth.currentUser?.getIdToken();
+      if (idToken == null) {
+        throw FirebaseAuthException(
+          code: 'unauthenticated',
+          message: 'Must be logged in to get auth code',
+        );
+      }
+
+      final response = await http.post(
+        Uri.parse(_getAuthCodeUrl),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $idToken',
+        },
+        body: jsonEncode({'data': {}}),
+      );
+
+      if (response.statusCode != 200) {
+        final error = jsonDecode(response.body)['error'] ?? {};
+        throw FirebaseAuthException(
+          code: error['status'] ?? 'unknown',
+          message: error['message'] ?? 'Failed to get authorization code',
+        );
+      }
+
+      final result = jsonDecode(response.body)['result'] ?? jsonDecode(response.body);
+      return result['code'] as String?;
+    } catch (e) {
+      log('Get auth code error: $e', name: 'AuthService');
       rethrow;
     }
   }

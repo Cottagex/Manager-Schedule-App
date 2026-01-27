@@ -6,6 +6,7 @@ import '../widgets/settings/schedule_settings_tab.dart';
 import '../widgets/settings/shift_templates_tab.dart';
 import '../widgets/settings/store_hours_tab.dart';
 import '../widgets/settings/cloud_sync_tab.dart';
+import '../widgets/settings/account_tab.dart';
 import '../services/theme_service.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -22,7 +23,7 @@ class _SettingsPageState extends State<SettingsPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 7, vsync: this);
+    _tabController = TabController(length: 8, vsync: this);
   }
 
   @override
@@ -73,6 +74,7 @@ class _SettingsPageState extends State<SettingsPage>
             Tab(text: "Store Settings"),
             Tab(text: "Schedule"),
             Tab(text: "Cloud Sync"),
+            Tab(text: "Account"),
           ],
         ),
       ),
@@ -89,6 +91,7 @@ class _SettingsPageState extends State<SettingsPage>
                 StoreHoursTab(),
                 ScheduleSettingsTab(),
                 CloudSyncTab(),
+                AccountTab(),
               ],
             ),
           ),

@@ -107,8 +107,8 @@ class _ApprovalQueuePageState extends State<ApprovalQueuePage>
     // Get raw entries (not expanded) for display
     final entries = await _timeOffDao.getAllTimeOffRaw();
     
-    // Sort by date descending (most recent first)
-    entries.sort((a, b) => b.date.compareTo(a.date));
+    // Sort by date ascending (oldest first, newest last)
+    entries.sort((a, b) => a.date.compareTo(b.date));
     
     if (mounted) {
       setState(() {
@@ -1094,7 +1094,7 @@ class _ApprovalQueuePageState extends State<ApprovalQueuePage>
                                     entries.add(_BulkTimeOffEntry(
                                       date: DateTime.now(),
                                       type: getDefaultType(),
-                                      hours: _settings?.ptoHoursPerRequest ?? 8,
+                                      hours: 9,
                                       days: 1,
                                     ));
                                   });
@@ -1196,10 +1196,10 @@ class _ApprovalQueuePageState extends State<ApprovalQueuePage>
                                                       if (v == 'vac') {
                                                         entry.days = 1;
                                                       } else if (v == 'pto') {
-                                                        entry.hours = _settings?.ptoHoursPerRequest ?? 8;
+                                                        entry.hours = 9;
                                                       } else if (v == 'sick') {
                                                         entry.isAllDay = true;
-                                                        entry.hours = _settings?.ptoHoursPerRequest ?? 8;
+                                                        entry.hours = 9;
                                                       }
                                                     });
                                                   }
@@ -1322,7 +1322,7 @@ class _ApprovalQueuePageState extends State<ApprovalQueuePage>
                                                       entry.endTime = '17:00';
                                                       entry.hours = 8;
                                                     } else {
-                                                      entry.hours = _settings?.ptoHoursPerRequest ?? 8;
+                                                      entry.hours = 9;
                                                     }
                                                   });
                                                 },

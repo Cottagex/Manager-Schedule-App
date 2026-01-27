@@ -36,7 +36,6 @@ class SettingsDao {
     const defaultSettings = Settings(
       id: _settingsId,
       ptoHoursPerTrimester: 30,
-      ptoHoursPerRequest: 8,
       maxCarryoverHours: 10,
       assistantVacationDays: 6,
       swingVacationDays: 7,

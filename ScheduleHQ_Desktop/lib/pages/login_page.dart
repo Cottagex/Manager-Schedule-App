@@ -272,10 +272,12 @@ class _LoginPageState extends State<LoginPage> {
     final emailController = TextEditingController();
     final passwordController = TextEditingController();
     final confirmPasswordController = TextEditingController();
+    final authCodeController = TextEditingController();
     final formKey = GlobalKey<FormState>();
     bool isCreating = false;
     bool obscurePassword = true;
     bool obscureConfirmPassword = true;
+    bool obscureAuthCode = true;
     String? dialogError;
 
     showDialog(
@@ -324,10 +326,16 @@ class _LoginPageState extends State<LoginPage> {
                         controller: nameController,
                         textInputAction: TextInputAction.next,
                         decoration: const InputDecoration(
-                          labelText: 'Name (optional)',
+                          labelText: 'Name',
                           prefixIcon: Icon(Icons.person_outlined),
                           border: OutlineInputBorder(),
                         ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Please enter your name';
+                          }
+                          return null;
+                        },
                       ),
                       const SizedBox(height: 16),
                       TextFormField(
@@ -385,7 +393,7 @@ class _LoginPageState extends State<LoginPage> {
                       TextFormField(
                         controller: confirmPasswordController,
                         obscureText: obscureConfirmPassword,
-                        textInputAction: TextInputAction.done,
+                        textInputAction: TextInputAction.next,
                         decoration: InputDecoration(
                           labelText: 'Confirm Password',
                           prefixIcon: const Icon(Icons.lock_outlined),
@@ -410,6 +418,37 @@ class _LoginPageState extends State<LoginPage> {
                           if (value != passwordController.text) {
                             return 'Passwords do not match';
                           }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: authCodeController,
+                        obscureText: obscureAuthCode,
+                        textInputAction: TextInputAction.done,
+                        decoration: InputDecoration(
+                          labelText: 'Authorization Code',
+                          prefixIcon: const Icon(Icons.security_outlined),
+                          border: const OutlineInputBorder(),
+                          helperText: 'Contact administrator for the code',
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              obscureAuthCode
+                                  ? Icons.visibility_outlined
+                                  : Icons.visibility_off_outlined,
+                            ),
+                            onPressed: () {
+                              setDialogState(() {
+                                obscureAuthCode = !obscureAuthCode;
+                              });
+                            },
+                          ),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter the authorization code';
+                          }
+                          // Server-side validation handles the actual code check
                           return null;
                         },
                       ),
@@ -438,9 +477,8 @@ class _LoginPageState extends State<LoginPage> {
                           await AuthService.instance.createManagerAccount(
                             email: emailController.text.trim(),
                             password: passwordController.text,
-                            displayName: nameController.text.trim().isNotEmpty
-                                ? nameController.text.trim()
-                                : null,
+                            displayName: nameController.text.trim(),
+                            authCode: authCodeController.text.trim(),
                           );
 
                           if (context.mounted) {

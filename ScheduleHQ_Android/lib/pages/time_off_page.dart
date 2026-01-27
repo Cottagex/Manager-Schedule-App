@@ -191,6 +191,7 @@ class _TimeOffPageState extends State<TimeOffPage>
           .doc(_managerUid)
           .collection('timeOff')
           .where('employeeUid', isEqualTo: _employeeUid)
+          .orderBy('date', descending: true)
           .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {

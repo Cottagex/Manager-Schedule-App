@@ -28,6 +28,12 @@ service cloud.firestore {
     match /managerSettings/{uid} {
       allow read, write: if request.auth != null && request.auth.uid == uid && isManager();
     }
+    
+    // Global settings - only managers can read/write auth code settings
+    // The Cloud Function handles public creation requests
+    match /settings/managerAuthCode {
+      allow read, write: if isManager();
+    }
 
     // ============== PER-MANAGER DATA ==============
     // Each manager has their own subcollections for employees, shifts, time-off, etc.

@@ -59,18 +59,6 @@ class _PtoRulesTabState extends State<PtoRulesTab> {
           ),
 
           TextField(
-            decoration: const InputDecoration(labelText: "PTO Hours Per Request"),
-            keyboardType: TextInputType.number,
-            controller: TextEditingController(text: _settings!.ptoHoursPerRequest.toString()),
-            onChanged: (v) {
-              final value = int.tryParse(v) ?? 0;
-              setState(() {
-                _settings = _settings!.copyWith(ptoHoursPerRequest: value);
-              });
-            },
-          ),
-
-          TextField(
             decoration: const InputDecoration(labelText: "Max Carryover Hours"),
             keyboardType: TextInputType.number,
             controller: TextEditingController(text: _settings!.maxCarryoverHours.toString()),
